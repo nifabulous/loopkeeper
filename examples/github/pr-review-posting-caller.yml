@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   review:
-    uses: example-org/loopkeeper/.github/workflows/pr-review.yml@0123456789abcdef0123456789abcdef01234567
+    uses: example-org/loopkeeper/.github/workflows/pr-review-posting.yml@0123456789abcdef0123456789abcdef01234567
     with:
       consumer_repo: ${{ github.repository }}
       loopkeeper_repo: example-org/loopkeeper
