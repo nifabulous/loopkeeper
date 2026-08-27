@@ -1,0 +1,23 @@
+{
+  "manifest": 1,
+  "kind": "triage",
+  "trust": {
+    "mode": "caller-attested",
+    "repo": "example/project",
+    "head_sha": "0000000000000000000000000000000000000000",
+    "trusted_revision": "1111111111111111111111111111111111111111"
+  },
+  "trusted": {
+    "policy": "policy.md",
+    "contract": null,
+    "context_files": []
+  },
+  "untrusted": {
+    "metadata": "metadata.json",
+    "diff": "diff.patch"
+  },
+  "limits": {
+    "max_input_bytes": 120000,
+    "max_output_bytes": 32000
+  }
+}
