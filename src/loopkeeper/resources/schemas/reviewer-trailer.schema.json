@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopkeeper.dev/schemas/reviewer-trailer.schema.json",
+  "title": "Loopkeeper Reviewer Trailer (Schema 2)",
+  "description": "Machine-readable trailer emitted at the end of each review comment. The marker is not a trust signal. Input accepts loopkeeper-verdict and codex-verdict for compatibility; output uses only loopkeeper-verdict. See docs/schemas.md as tiebreaker.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": 2,
+      "description": "Schema version. Unknown versions must be rejected without guessing."
+    },
+    "verdict": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Advisory verdict, e.g. CLEAN or BLOCK. The arbiter derives the disposition; the verdict is not authoritative."
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sev": {
+            "type": "string",
+            "enum": ["P0", "P1", "P2", "P3"],
+            "description": "P0 is accepted on ingest and normalized to P1, the highest blocking tier."
+          },
+          "state": {
+            "type": "string",
+            "enum": ["NEW", "OPEN", "RESOLVED"],
+            "description": "RESOLVED is emitted once with bounded evidence then never repeated."
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": "Single-line file path, bounded, without markup delimiters."
+          },
+          "cat": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "maxLength": 64,
+            "description": "Kebab-case category."
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "maxLength": 64,
+            "description": "Stable kebab-case finding identifier, proposal only; arbiter derives identity from (file, cat)."
+          },
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "files": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "verification": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": ["files", "verification"],
+            "additionalProperties": false
+          },
+          "unverifiable": {
+            "type": "object",
+            "properties": {
+              "missing": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "description": "Bounded artifact description; single-line, no control characters."
+              }
+            },
+            "required": ["missing"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["sev", "state", "file", "cat", "id"],
+        "allOf": [
+          {
+            "if": {
+              "properties": { "state": { "const": "RESOLVED" } }
+            },
+            "then": {
+              "required": ["evidence"],
+              "properties": {
+                "unverifiable": false
+              }
+            }
+          }
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["schema", "verdict", "findings"],
+  "additionalProperties": false
+}

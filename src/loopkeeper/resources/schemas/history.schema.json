@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopkeeper.dev/schemas/history.schema.json",
+  "title": "Loopkeeper Canonical History (Schema 1)",
+  "description": "Versioned canonical history emitted by the collector and consumed by the pure arbiter. Trusted control-plane record with additionalProperties false. See docs/schemas.md as tiebreaker.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": 1,
+      "description": "Schema version. Unknown versions must be rejected without guessing."
+    },
+    "repo": {
+      "type": "string",
+      "pattern": "^[^/\\s]+/[^/\\s]+$",
+      "description": "Repository identity as owner/name."
+    },
+    "pr": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Pull request number."
+    },
+    "current_head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$",
+      "description": "Current head SHA for the PR."
+    },
+    "current_diff_files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "description": "Sanitized changed-file set used for bounded RESOLVED evidence checks."
+    },
+    "rounds": {
+      "type": "array",
+      "description": "Valid and invalid rounds sorted canonically by (created_at, comment_id). Invalid rounds contain no findings and count toward hard-cap accounting.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["valid", "invalid"]
+          },
+          "comment": {
+            "type": ["object", "null"],
+            "properties": {
+              "comment_id": {
+                "type": "integer"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 timestamp; sorted with comment_id as tie-breaker."
+              },
+              "author_login": {
+                "type": "string"
+              },
+              "head_sha": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{7,64}$"
+              },
+              "marker": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              }
+            },
+            "required": ["comment_id", "created_at"],
+            "additionalProperties": false
+          },
+          "validation": {
+            "type": ["object", "null"],
+            "properties": {
+              "valid": {
+                "type": "boolean"
+              },
+              "schema": {
+                "type": ["integer", "null"]
+              },
+              "error_code": {
+                "type": ["string", "null"]
+              },
+              "diagnostic": {
+                "type": "string",
+                "maxLength": 512
+              }
+            },
+            "required": ["valid", "schema", "error_code", "diagnostic"],
+            "additionalProperties": false
+          },
+          "trailer": {
+            "type": ["object", "null"],
+            "description": "Full trailer for valid rounds (schema 2). Invalid rounds must not contain findings.",
+            "properties": {
+              "schema": { "const": 2 },
+              "verdict": { "type": "string" },
+              "findings": { "type": "array" }
+            },
+            "required": ["schema", "verdict", "findings"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["kind"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["schema", "repo", "pr", "current_head_sha", "current_diff_files", "rounds"],
+  "additionalProperties": false
+}
