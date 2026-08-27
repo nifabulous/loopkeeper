@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopkeeper.dev/schemas/verification.schema.json",
+  "title": "Loopkeeper Verification Record (Schema 1)",
+  "description": "Caller-attested verification record for manifest trust. Uses canonical manifest SHA-256, HMAC-SHA256 signature, and key selected by key_id from protected LOOPKEEPER_TRUST_KEY_FILE. Signature comparison is constant-time. Path to key file comes only from environment/CLI, never manifest.",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "const": 1,
+      "description": "Schema version for verification record."
+    },
+    "method": {
+      "type": "string",
+      "const": "hmac-sha256",
+      "description": "Signature method. Only hmac-sha256 is supported."
+    },
+    "key_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Key identifier selected from protected key file."
+    },
+    "repo": {
+      "type": "string",
+      "pattern": "^[^/\\s]+/[^/\\s]+$"
+    },
+    "head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "trusted_revision": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{7,64}$"
+    },
+    "manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "description": "Canonical manifest digest: SHA-256 over canonical UTF-8 JSON sorted keys compact separators plus trailing newline after removing trust.verification."
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "description": "Hex HMAC-SHA256 over loopkeeper-manifest-v1\\n{manifest_sha256}\\n{repo}\\n{head_sha}\\n{trusted_revision} using key selected by key_id."
+    }
+  },
+  "required": ["schema", "method", "key_id", "repo", "head_sha", "trusted_revision", "manifest_sha256", "signature"],
+  "additionalProperties": false
+}

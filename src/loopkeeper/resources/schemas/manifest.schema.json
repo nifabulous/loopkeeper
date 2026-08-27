@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loopkeeper.dev/schemas/manifest.schema.json",
+  "title": "Loopkeeper Manifest (Schema 1)",
+  "description": "Trusted control-plane manifest for Loopkeeper runs. Versioned with manifest:1 and trust-separated roots. See Task 6. Validates manifest:1, kind-specific fields, strict trust mode, positive limits, repo/head/trusted_revision shapes, and separate trusted/untrusted roots. No additionalProperties on trusted control plane.",
+  "type": "object",
+  "properties": {
+    "manifest": {
+      "const": 1,
+      "description": "Schema version. Unknown versions must be rejected without guessing."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["review", "triage", "agent", "history"],
+      "description": "Kind-specific required fields are enforced per kind."
+    },
+    "trust": {
+      "type": "object",
+      "description": "Trust boundary: mode, repo, head_sha, trusted_revision, and optional verification for caller-attested.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["github-forge-verified", "caller-attested"],
+          "description": "Strict trust mode. github-forge-verified is GitHub-only; generic requires caller-attested plus verification."
+        },
+        "repo": {
+          "type": "string",
+          "pattern": "^[^/\\s]+/[^/\\s]+$",
+          "description": "Repository identity as owner/name."
+        },
+        "head_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$",
+          "description": "Head SHA for the run (7-64 hex)."
+        },
+        "trusted_revision": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$",
+          "description": "Verified trusted revision (default branch SHA)."
+        },
+        "verification": {
+          "type": "object",
+          "description": "Required for caller-attested. Contains method and trusted record.",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "hmac-sha256"
+            },
+            "record": {
+              "$ref": "verification.schema.json"
+            }
+          },
+          "required": ["method", "record"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["mode", "repo", "head_sha", "trusted_revision"],
+      "additionalProperties": false
+    },
+    "trusted": {
+      "type": "object",
+      "description": "Paths that must resolve under the trusted root.",
+      "properties": {
+        "policy": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Relative path to policy file under trusted root, or null."
+        },
+        "contract": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "context_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "untrusted": {
+      "type": "object",
+      "description": "Paths that must resolve under the untrusted root.",
+      "properties": {
+        "metadata": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "diff": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": true
+    },
+    "limits": {
+      "type": "object",
+      "description": "Positive byte ceilings.",
+      "properties": {
+        "max_input_bytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "max_output_bytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        }
+      },
+      "required": ["max_input_bytes", "max_output_bytes"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["manifest", "kind", "trust", "trusted", "untrusted", "limits"],
+  "additionalProperties": false
+}
