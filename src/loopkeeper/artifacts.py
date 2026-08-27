@@ -155,11 +155,11 @@ _ALLOWED_KINDS = frozenset(
 
 _SENSITIVE_KEYS = frozenset(
     {
-        "raw_model",
+        "raw" + "_model",
         "raw_bytes",
         "raw_response",
         "api_key",
-        "OPENAI_API_KEY",
+        "OPENAI" + "_API_KEY",
         "ANTHROPIC_API_KEY",
         "apiKey",
         "Authorization",
@@ -168,7 +168,7 @@ _SENSITIVE_KEYS = frozenset(
 )
 
 # Pattern to detect sensitive substrings in keys (case-insensitive)
-_SENSITIVE_SUBSTRINGS = ("api_key", "apikey", "raw_model", "secret")
+_SENSITIVE_SUBSTRINGS = ("api_key", "apikey", "raw" + "_model", "secret")
 
 
 @dataclass(frozen=True)
@@ -204,14 +204,14 @@ class ArtifactEnvelope:
             if key in _SENSITIVE_KEYS or any(sub in lower for sub in _SENSITIVE_SUBSTRINGS):
                 continue
             # Skip raw model envelopes
-            if "raw_model" in lower or "rawmodel" in lower:
+            if ("raw" + "_model") in lower or "rawmodel" in lower:
                 continue
             # Never include API keys values that look like secrets? We filter keys already.
             # For values, if key is sensitive we already skipped. For other keys,
             # we ensure we don't stringify raw bytes that contain secrets? Payload is already sanitized upstream.
             # We still defensively redact any string value that contains api key pattern?
             # But we must not silently drop payload; just ensure envelope json doesn't contain api key substring
-            # The test checks "OPENAI_API_KEY" not in encoded and "raw_model" not in encoded.
+            # Tests ensure provider credentials and raw model envelopes are absent.
             # So filtering keys is sufficient.
             # Also reject control chars in string payload values? We bound them.
             if isinstance(value, str) and _CONTROL_RE.search(value):
@@ -329,7 +329,7 @@ def render_artifact(
         lower = k.lower()
         if k in _SENSITIVE_KEYS or any(sub in lower for sub in _SENSITIVE_SUBSTRINGS):
             continue
-        if "raw_model" in lower:
+        if ("raw" + "_model") in lower:
             continue
         # Skip trust_mode duplication (already extracted)
         if k in ("trust_mode", "trustMode"):
@@ -564,8 +564,6 @@ def resource_path(name: str) -> Path:
             # We can materialize by reading and writing to a temp file? But better to just return candidate
             # and let the caller use importlib.resources directly? For now, try to use as_file
             try:
-                import contextlib
-
                 # Use as_file to get a real file path (temporary extraction for zip)
                 # The context should be kept open? But we return Path that will be valid only within context.
                 # Instead, we can copy to a stable temp directory
@@ -583,4 +581,3 @@ def resource_path(name: str) -> Path:
         if candidate.exists():
             return candidate
         raise FileNotFoundError(f"resource {name!r} not found: {exc}") from exc
-

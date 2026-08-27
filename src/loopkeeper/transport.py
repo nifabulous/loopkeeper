@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import json
 import re
+import argparse
+import os
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import IO
 
 from .errors import ConfigError, TransportError
@@ -370,3 +374,75 @@ def request_model(
         except TransportError:
             # Second failure – do not retry again
             raise
+
+
+def _transport_cli(argv: list[str] | None = None) -> int:
+    """Small bounded CLI used by the trusted GitHub adapter.
+
+    Keeping this entry point beside the provider-neutral transport means shell
+    adapters do not need a provider-specific compatibility script.  All input
+    and output files are explicitly bounded and the raw model response is
+    written only to the requested output path.
+    """
+    parser = argparse.ArgumentParser(prog="python -m loopkeeper.transport")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--reasoning-effort", default="none")
+    parser.add_argument("--instructions", required=True, type=Path)
+    parser.add_argument("--input", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--max-input-bytes", required=True, type=int)
+    parser.add_argument("--max-output-tokens", required=True, type=int)
+    parser.add_argument("--max-output-bytes", required=True, type=int)
+    parser.add_argument("--request-timeout", required=True, type=int)
+    parser.add_argument("--job-deadline", type=int)
+    parser.add_argument("--require-complete-input", action="store_true")
+    args = parser.parse_args(argv)
+
+    if args.max_input_bytes <= 0 or args.max_output_tokens <= 0 or args.max_output_bytes <= 0:
+        raise ConfigError("transport limits must be positive")
+    instruction_bytes = args.instructions.read_bytes()
+    input_bytes = args.input.read_bytes()
+    combined = len(instruction_bytes) + len(input_bytes)
+    if combined > args.max_input_bytes:
+        raise TransportError(
+            f"model input exceeded {args.max_input_bytes} bytes ({combined})"
+        )
+    try:
+        instructions = instruction_bytes.decode("utf-8")
+        input_text = input_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TransportError("model input is not valid UTF-8") from exc
+
+    api_key = os.environ.get("LOOPKEEPER_API_KEY", "")
+    if not api_key:
+        raise ConfigError("LOOPKEEPER_API_KEY is required")
+    config = TransportConfig(
+        api_style=os.environ.get("LOOPKEEPER_API_STYLE", "responses"),
+        base_url=os.environ.get("LOOPKEEPER_API_BASE_URL"),
+        api_key=api_key,
+        request_timeout=args.request_timeout,
+        job_deadline_epoch=args.job_deadline,
+        retry_unestablished_connection=True,
+    )
+    request = ModelRequest(
+        instructions=instructions,
+        input_text=input_text,
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+        max_output_tokens=args.max_output_tokens,
+        max_output_bytes=args.max_output_bytes,
+    )
+    response = request_model(request, config)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = args.output.with_name(f".{args.output.name}.tmp")
+    temporary.write_text(response.text, encoding="utf-8")
+    temporary.replace(args.output)
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by shell adapters
+    try:
+        raise SystemExit(_transport_cli())
+    except (ConfigError, TransportError) as exc:
+        print(f"loopkeeper transport: {exc}", file=sys.stderr)
+        raise SystemExit(2 if isinstance(exc, ConfigError) else 3) from None

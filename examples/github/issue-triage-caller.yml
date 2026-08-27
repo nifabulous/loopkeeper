@@ -1,0 +1,31 @@
+# LOOPKEEPER-TEMPLATE: replace the fixture repository and release SHA before copying.
+name: Loopkeeper Issue Triage
+
+on:
+  issues:
+    types: [opened, edited, labeled, reopened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        required: true
+        type: string
+  schedule:
+    - cron: "47 3 * * 2,4"
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  triage:
+    uses: example-org/loopkeeper/.github/workflows/issue-triage.yml@0123456789abcdef0123456789abcdef01234567
+    with:
+      consumer_repo: ${{ github.repository }}
+      loopkeeper_repo: example-org/loopkeeper
+      consumer_trusted_sha: ""
+      loopkeeper_sha: 0123456789abcdef0123456789abcdef01234567
+      job_timeout_seconds: 1200
+      issue_number: ${{ github.event.issue.number || inputs.issue_number }}
+      post_comments: false
+    secrets:
+      model_api_key: ${{ secrets.LOOPKEEPER_API_KEY }}

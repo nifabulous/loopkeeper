@@ -14,6 +14,7 @@ sanitizer corpus.
 from __future__ import annotations
 
 import re
+import sys
 from typing import NamedTuple, Protocol
 
 from .errors import SecurityError
@@ -338,3 +339,7 @@ def sanitize_with_metadata(text: str, redactor: Redactor | None = None) -> Redac
 
 def sanitize(text: str, redactor: Redactor | None = None) -> str:
     return sanitize_with_metadata(text, redactor).text
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by shell adapters
+    sys.stdout.write(sanitize(sys.stdin.read()))

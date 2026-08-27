@@ -17,7 +17,8 @@ reference consumer, alongside issue triage and headless agent execution.
 
 - A dependency-free Python package (`src/loopkeeper`) with schemas, the pure
   arbiter, transport, redaction, truncation, manifests, and CLI.
-- A GitHub adapter (Bash orchestration + reusable workflows) in later phases.
+- A GitHub adapter (Bash orchestration + pinned reusable workflows) for PR
+  review and issue triage.
 - Bounded execution with explicit byte/token ceilings and trust-boundary
   enforcement.
 
@@ -29,6 +30,18 @@ python -m loopkeeper --version   # -> loopkeeper 0.1.0
 loopkeeper --version
 python -m pytest -q
 ```
+
+GitHub consumers should start with the read-only templates in
+`examples/github/`. Replace the fixture slug and full release SHA, then review
+the caller permissions. Posting callers are separate and require an explicit
+human-controlled `post_comments: true`; the adapter enforces
+`LOOPKEEPER_OPERATOR=1` for every write. Generic CI consumers can run
+`examples/ci/generic-review.sh` or `examples/ci/generic-triage.sh` with a
+caller-attested manifest and receive artifacts only.
+
+The trust model, release process, and staged dogfood gates are documented in
+[`docs/security.md`](docs/security.md), [`docs/release.md`](docs/release.md),
+and [`docs/dogfood-runbook.md`](docs/dogfood-runbook.md).
 
 ## Source ledger
 

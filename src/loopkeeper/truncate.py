@@ -5,6 +5,9 @@ Ported from Relay e834773 scripts/codex_truncate.py.
 
 from __future__ import annotations
 
+import argparse
+import sys
+
 DEFAULT_MARKER = "\n\n[Truncated at {limit} bytes.]\n"
 
 
@@ -40,3 +43,11 @@ def truncate_utf8(text: str, max_bytes: int, marker: str = DEFAULT_MARKER) -> st
 def _cut(text: str, max_bytes: int) -> str:
     encoded = text.encode("utf-8")[:max_bytes]
     return encoded.decode("utf-8", errors="ignore")
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by shell adapters
+    parser = argparse.ArgumentParser(prog="python -m loopkeeper.truncate")
+    parser.add_argument("--max-bytes", required=True, type=int)
+    parser.add_argument("--marker", default=DEFAULT_MARKER)
+    args = parser.parse_args()
+    sys.stdout.write(truncate_utf8(sys.stdin.read(), args.max_bytes, args.marker))

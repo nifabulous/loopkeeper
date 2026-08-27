@@ -10,7 +10,6 @@ import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Protocol
 
 # ---------------------------------------------------------------------------
 # Contract model

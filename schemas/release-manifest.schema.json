@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schema", "version", "commit_sha", "package_sha256", "workflow_paths", "provenance"],
+  "properties": {
+    "schema": {"const": 1},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "commit_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "workflow_paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "provenance": {"type": "object", "required": ["source", "builder"], "additionalProperties": true}
+  },
+  "additionalProperties": false
+}

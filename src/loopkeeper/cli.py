@@ -149,7 +149,6 @@ def _cmd_review(args: argparse.Namespace) -> int:
     from .attestation import AttestationVerifier
     from .model_binding import resolve_model, resolve_settings, Settings
     from .transport import ModelRequest, TransportConfig, request_model
-    from .redaction import sanitize
     from .schema import parse_trailer
     from .policy import load_policy, Policy
     from .prompt import render_review_prompt, UntrustedArtifacts
@@ -256,7 +255,7 @@ def _cmd_review(args: argparse.Namespace) -> int:
     except ConfigError:
         settings = Settings()
 
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("LOOPKEEPER_API_KEY") or "test-key-dummy"
+    api_key = os.environ.get("LOOPKEEPER_API_KEY") or "test-key-dummy"
 
     transport_config = TransportConfig(
         api_style=settings.api_style,
@@ -342,7 +341,6 @@ def _cmd_triage(args: argparse.Namespace) -> int:
     from .attestation import AttestationVerifier
     from .model_binding import resolve_model, resolve_settings, Settings
     from .transport import ModelRequest, TransportConfig, request_model
-    from .redaction import sanitize
     from .schema import parse_trailer
 
     manifest_path = Path(args.manifest)
@@ -378,7 +376,7 @@ def _cmd_triage(args: argparse.Namespace) -> int:
     except ConfigError:
         settings = Settings()
 
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("LOOPKEEPER_API_KEY") or "test-key-dummy"
+    api_key = os.environ.get("LOOPKEEPER_API_KEY") or "test-key-dummy"
     transport_config = TransportConfig(
         api_style=settings.api_style,
         base_url=settings.api_base_url,
@@ -444,88 +442,77 @@ def _cmd_triage(args: argparse.Namespace) -> int:
 
 
 def _cmd_agent(args: argparse.Namespace) -> int:
+    from .agent import AgentConfig, AgentRequest, run_agent
     from .artifacts import Provenance, render_artifact, write_artifacts
     from .manifest import load_manifest
-    from .attestation import AttestationVerifier
     from .model_binding import resolve_model, resolve_settings, Settings
-    from .transport import ModelRequest, TransportConfig, request_model
-    from .redaction import sanitize
+    from .transport import TransportConfig
 
     manifest_path = Path(args.manifest)
     output_dir = _get_output_dir(args)
     trusted_root, untrusted_root = _resolve_roots(args, manifest_path)
-
     manifest = load_manifest(manifest_path, trusted_root, untrusted_root)
-    trust = manifest.get("trust", {})  # type: ignore[assignment]
+    trust = manifest.get("trust", {})
+    if not isinstance(trust, dict):
+        raise ManifestError("trust must be an object")
     repo = str(trust.get("repo", ""))
     head_sha = str(trust.get("head_sha", ""))
     trusted_rev = str(trust.get("trusted_revision", ""))
     trust_mode = str(trust.get("mode", "unknown"))
     provenance = Provenance(repo=repo or None, head_sha=head_sha or None, trusted_revision=trusted_rev or None)
 
-    if trust_mode == "caller-attested":
-        key_file = _get_key_file(args)
-        if key_file is None:
-            raise TrustError("LOOPKEEPER_TRUST_KEY_FILE not set")
-        verification = trust.get("verification")
-        if not isinstance(verification, dict):
-            raise TrustError("missing verification")
-        record = verification.get("record")
-        verifier = AttestationVerifier()
-        verifier.verify(record, manifest, key_file)  # type: ignore[arg-type]
+    agent_name = getattr(args, "agent_name", None) or os.environ.get("LOOPKEEPER_AGENT_NAME", "domain-researcher")
+    task_text = getattr(args, "task_text", None)
+    if task_text is None:
+        task_text = os.environ.get("LOOPKEEPER_TASK_TEXT", "")
 
     try:
-        model = resolve_model("agent", None, os.environ)
+        model = resolve_model(agent_name, None, os.environ)
     except ConfigError:
         model = "test-model"
     try:
         settings = resolve_settings({}, os.environ)
     except ConfigError:
         settings = Settings()
-
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("LOOPKEEPER_API_KEY") or "test-key-dummy"
     transport_config = TransportConfig(
         api_style=settings.api_style,
         base_url=settings.api_base_url,
-        api_key=api_key,
+        api_key=os.environ.get("LOOPKEEPER_API_KEY") or "test-key-dummy",
         request_timeout=settings.request_timeout,
         job_deadline_epoch=None,
     )
-
-    instructions = "Agent instructions"
-    input_text = "agent input"
-
-    model_request = ModelRequest(
-        instructions=instructions,
-        input_text=input_text,
-        model=model,
-        reasoning_effort=settings.reasoning_effort,
-        max_output_tokens=settings.max_output_tokens,
-        max_output_bytes=settings.max_output_bytes,
+    result = run_agent(
+        AgentRequest(
+            manifest=manifest,
+            agent_name=agent_name,
+            task_text=task_text,
+            trusted_reader=_FsTrustedReader(trusted_root),
+        ),
+        AgentConfig(
+            model=model,
+            transport=transport_config,
+            max_input_bytes=settings.max_input_bytes,
+            max_output_tokens=settings.max_output_tokens,
+            max_output_bytes=settings.max_output_bytes,
+        ),
     )
-
-    response = request_model(model_request, transport_config)
-    sanitized = _sanitize_model_text(response.text)
-
-    status = "complete"
-    if "UNVERIFIABLE" in sanitized:
-        status = "UNVERIFIABLE"
-
-    agent_md = f"# Agent\n\n{sanitized}\n"
-    payload = {"text": sanitized, "trust_mode": trust_mode}
-    envelope = render_artifact("agent", status, provenance, payload)
+    sanitized = _sanitize_model_text(result.text)
+    status = "UNVERIFIABLE" if "UNVERIFIABLE" in sanitized else "complete"
+    envelope = render_artifact(
+        "agent",
+        status,
+        provenance,
+        {"text": sanitized, "trust_mode": trust_mode, "agent_name": agent_name},
+    )
     agent_json = json.dumps(envelope.to_dict(), sort_keys=True, separators=(",", ":")) + "\n"
-
-    write_artifacts(output_dir, {"agent.md": agent_md, "agent.json": agent_json})
+    write_artifacts(output_dir, {"agent.md": f"# Agent\n\n{sanitized}\n", "agent.json": agent_json})
     return 0
 
 
 def _cmd_arbitrate(args: argparse.Namespace) -> int:
     from .artifacts import Provenance, render_artifact, write_artifacts
-    from .redaction import sanitize
     from .schema import parse_history
     from .arbiter import decide, ArbiterConfig
-    from .errors import ConfigError as CfgErr
 
     output_dir = _get_output_dir(args)
 
@@ -677,6 +664,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Agent
     agent_p = subparsers.add_parser("agent", parents=[common], help="run agent")
     agent_p.add_argument("--manifest", required=True, type=str, help="path to manifest JSON")
+    agent_p.add_argument("--agent-name", type=str, default=None, help="trusted agent definition name")
+    agent_p.add_argument("--task-text", type=str, default=None, help="untrusted task text")
 
     # Arbitrate
     arbitrate_p = subparsers.add_parser("arbitrate", parents=[common], help="run arbiter on history")

@@ -1,0 +1,63 @@
+name: Loopkeeper Agent (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      consumer_repo:
+        type: string
+        required: true
+      loopkeeper_repo:
+        type: string
+        required: true
+      loopkeeper_sha:
+        type: string
+        required: true
+      agent_name:
+        type: string
+        required: true
+      task_text:
+        type: string
+        required: true
+    secrets:
+      model_api_key:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out Loopkeeper at immutable release SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.loopkeeper_repo }}
+          ref: ${{ inputs.loopkeeper_sha }}
+          path: loopkeeper
+          fetch-depth: 1
+      - name: Verify Loopkeeper checkout before trusted reads
+        env:
+          LOOPKEEPER_SHA: ${{ inputs.loopkeeper_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C loopkeeper rev-parse HEAD)" == "$LOOPKEEPER_SHA" ]]
+          if [[ -f loopkeeper/release/release-manifest.json ]]; then
+            PYTHONPATH="$GITHUB_WORKSPACE/loopkeeper/src" python3 -c \
+              'from pathlib import Path; from loopkeeper.adapters.github.trust import verify_loopkeeper_checkout; import os; verify_loopkeeper_checkout(Path("loopkeeper"), os.environ["LOOPKEEPER_SHA"], Path("loopkeeper/release/release-manifest.json"))'
+          fi
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Run unprivileged agent CLI
+        working-directory: loopkeeper
+        env:
+          LOOPKEEPER_API_KEY: ${{ secrets.model_api_key }}
+          LOOPKEEPER_AGENT_NAME: ${{ inputs.agent_name }}
+          LOOPKEEPER_TASK_TEXT: ${{ inputs.task_text }}
+        run: |
+          set -euo pipefail
+          echo "Agent dispatch is intentionally artifact-only; no repository code is executed."
+          python3 -m loopkeeper --version

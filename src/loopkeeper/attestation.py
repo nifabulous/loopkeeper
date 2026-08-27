@@ -103,7 +103,7 @@ def _load_key_file(key_file: Path) -> dict[str, bytes]:
 
     Returns a mapping of key_id -> raw secret bytes.
 
-    The file must be UTF-8 JSON ``{"schema":1,"keys":{"key_id":"base64-secret"}}``.
+    The file must be UTF-8 JSON with a base64-encoded secret value.
     On POSIX, reject symlinked paths and group/world-readable permissions.
     Each secret is base64-decoded once and must be >=32 bytes.
     """

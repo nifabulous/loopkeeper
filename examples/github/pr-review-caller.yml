@@ -1,0 +1,34 @@
+# LOOPKEEPER-TEMPLATE: replace the fixture repository and release SHA before copying.
+name: Loopkeeper PR Review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * 1-5"
+
+permissions:
+  contents: read
+  actions: read
+  checks: read
+  pull-requests: read
+
+jobs:
+  review:
+    uses: example-org/loopkeeper/.github/workflows/pr-review.yml@0123456789abcdef0123456789abcdef01234567
+    with:
+      consumer_repo: ${{ github.repository }}
+      loopkeeper_repo: example-org/loopkeeper
+      consumer_trusted_sha: ""
+      loopkeeper_sha: 0123456789abcdef0123456789abcdef01234567
+      ci_workflow_name: CI
+      ci_workflow_file: ci.yml
+      expected_head_sha: ${{ github.event.workflow_run.head_sha || '' }}
+      job_timeout_seconds: 1200
+      post_comments: false
+    secrets:
+      model_api_key: ${{ secrets.LOOPKEEPER_API_KEY }}
