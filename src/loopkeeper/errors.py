@@ -12,3 +12,11 @@ class SchemaError(ValueError):
     invalid identity, and invalid lifecycle transitions.
     """
 
+
+class ConfigError(ValueError):
+    """Raised for invalid configuration, missing model binding, or malformed settings."""
+
+
+class TransportError(RuntimeError):
+    """Raised for model transport failures, timeouts, or envelope violations."""
+
