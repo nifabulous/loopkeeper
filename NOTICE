@@ -1,0 +1,14 @@
+Loopkeeper
+Copyright 2026 Loopkeeper Contributors
+
+This product is an extraction from Relay (Educational Payment Simulation)
+at commit e834773. The original Relay implementation and its review-loop
+components are retained in the source repository for reference. This
+standalone package reuses the Relay review-loop design, schemas, and
+security transforms with attribution to the Relay contributors.
+
+The extraction ledger is recorded in docs/source-ledger.md and the source
+snapshot is identified in .extraction-source.
+
+This NOTICE is provided for attribution and provenance; see LICENSE for
+licensing terms.
