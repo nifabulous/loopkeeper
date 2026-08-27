@@ -414,13 +414,62 @@ if ! python3 -m loopkeeper.redaction <"$TEMP_DIR/prev-review.md" >"$TEMP_DIR/pre
   exit 4
 fi
 
-# Sanitize metadata/diff before wrapping as untrusted
+# Collect and sanitize metadata/file changes before wrapping as untrusted.
 if ! printf '%s\n' "$METADATA" | python3 -m loopkeeper.redaction >"$TEMP_DIR/metadata.json" 2>/dev/null; then
   echo "Could not sanitize PR metadata; refusing to pass raw metadata to the model." >&2
   exit 4
 fi
-if ! gh pr diff "$PR_NUMBER" --repo "$GH_REPO" | python3 -m loopkeeper.redaction >"$TEMP_DIR/pr.diff" 2>/dev/null; then
-  echo "Could not collect and sanitize the PR diff; refusing to pass raw diff to the model." >&2
+
+# The rendered diff endpoint rejects pull requests with more than 300 files.
+# Use the bounded pull-request-files API instead so large asset/data PRs still
+# receive a review. A page cap and aggregate byte cap keep this fail-closed.
+collect_bounded_pr_files() {
+  local out_file="$1"
+  local page=1
+  local page_size=100
+  local page_file
+  local count
+  : >"$out_file"
+  while (( page <= LOOPKEEPER_CHECK_MAX_PAGES )); do
+    page_file="$TEMP_DIR/pr-files-page-${page}.json"
+    if ! gh api \
+      "repos/${GH_REPO}/pulls/${PR_NUMBER}/files?per_page=${page_size}&page=${page}" \
+      2>/dev/null | capture_bounded_stream "$LOOPKEEPER_CHECK_MAX_RAW_BYTES" "pull-request-files API page" >"$page_file"; then
+      return 1
+    fi
+    if ! jq -e 'type == "array" and all(.[]; type == "object" and (.filename | type) == "string" and ((.patch? == null) or ((.patch | type) == "string")))' \
+      "$page_file" >/dev/null 2>&1; then
+      return 1
+    fi
+    count="$(jq 'length' "$page_file")"
+    if (( count == 0 )); then
+      break
+    fi
+    jq -c '.[] | {
+      filename: .filename,
+      previous_filename: (.previous_filename // null),
+      status: (.status // ""),
+      additions: (.additions // 0),
+      deletions: (.deletions // 0),
+      changes: (.changes // 0),
+      patch: (.patch // null)
+    }' "$page_file" >>"$out_file"
+    if (( count < page_size )); then
+      break
+    fi
+    page=$((page + 1))
+  done
+  (( page <= LOOPKEEPER_CHECK_MAX_PAGES )) || return 1
+}
+
+if ! collect_bounded_pr_files "$TEMP_DIR/pr-files.jsonl"; then
+  echo "Could not collect bounded pull-request file changes; refusing to pass raw diff to the model." >&2
+  exit 4
+fi
+if ! jq -s '{format: "github-pull-request-files-v1", files: .}' "$TEMP_DIR/pr-files.jsonl" \
+  | capture_bounded_stream "$LOOPKEEPER_MAX_INPUT_BYTES" "pull-request file changes" \
+  | python3 -m loopkeeper.redaction >"$TEMP_DIR/pr.diff" 2>/dev/null; then
+  echo "Could not sanitize the bounded pull-request file changes; refusing to pass raw diff to the model." >&2
   exit 4
 fi
 

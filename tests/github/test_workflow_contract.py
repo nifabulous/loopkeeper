@@ -32,6 +32,20 @@ def test_reusable_pr_workflow_has_workflow_call_and_no_direct_trigger():
         assert re.search(rf"^\s+{name}:$", raw, re.MULTILINE)
 
 
+def test_pr_review_uses_bounded_pull_request_files_api_for_large_prs():
+    raw = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+    assert 'pulls/${PR_NUMBER}/files?per_page=' in raw
+    assert "gh pr diff" not in raw
+
+
+def test_reusable_pr_workflow_scopes_write_permission_to_writer_job():
+    raw = (ROOT / ".github/workflows/pr-review.yml").read_text(encoding="utf-8")
+    top_level = raw.split("jobs:", 1)[0]
+    writer = raw.split("\n  writer:", 1)[1]
+    assert re.search(r"^\s+pull-requests: read$", top_level, re.MULTILINE)
+    assert re.search(r"^\s+permissions:\n(?:\s+\S+: \S+\n)*\s+pull-requests: write$", writer, re.MULTILINE)
+
+
 def test_all_action_and_reusable_workflow_refs_are_full_sha_pinned():
     paths = list((ROOT / ".github/workflows").rglob("*.yml")) + list(
         (ROOT / "examples/github").rglob("*.yml")
