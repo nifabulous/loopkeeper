@@ -59,8 +59,10 @@ commit and manifest binding.
 
 ## Reusable workflows
 
-- `.github/workflows/pr-review.yml` and `issue-triage.yml` are the Loopkeeper
-  reusable entrypoints; they call the GitHub adapter scripts from the pinned
-  `loopkeeper_sha` checkout and verify both `consumer_trusted_sha` (forge
-  default-branch tip) and `loopkeeper_sha` (checkout + manifest) before
-  invoking review.
+- `.github/workflows/pr-review.yml` is the read-only Loopkeeper PR-review
+  entrypoint. It grants only read permissions and permanently disables its
+  writer job. Use `.github/workflows/pr-review-posting.yml` only for an
+  explicitly approved operator workflow; it grants `pull-requests: write` and
+  runs the same adapter from the pinned `loopkeeper_sha` checkout. Both paths
+  verify `consumer_trusted_sha` (forge default-branch tip) and
+  `loopkeeper_sha` (checkout + manifest) before invoking review.

@@ -46,6 +46,7 @@ jobs:
               "package_sha256": digest,
               "workflow_paths": [
                   ".github/workflows/pr-review.yml",
+                  ".github/workflows/pr-review-posting.yml",
                   ".github/workflows/issue-triage.yml",
                   ".github/workflows/agent.yml",
               ],

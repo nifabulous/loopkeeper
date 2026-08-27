@@ -1,4 +1,4 @@
-name: Loopkeeper PR Review (read-only reusable)
+name: Loopkeeper PR Review (posting reusable)
 
 on:
   workflow_call:
@@ -58,7 +58,7 @@ permissions:
   contents: read
   actions: read
   checks: read
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   resolve:
@@ -179,13 +179,15 @@ jobs:
           retention-days: 7
 
   writer:
-    # This read-only entry point intentionally never creates a writer job.
-    # GitHub requires a non-constant expression for reusable-job conditions;
-    # run IDs are always positive, so this remains permanently disabled.
-    if: ${{ inputs.post_comments && github.run_id == 0 }}
+    if: ${{ inputs.post_comments }}
     needs: [resolve, review]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: write
     concurrency:
       group: loopkeeper-pr-review-writer-${{ inputs.consumer_repo }}-${{ inputs.pr_number || github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
       cancel-in-progress: false
