@@ -16,6 +16,7 @@ from loopkeeper.transport import (
     TransportError,
     build_payload,
     request_model,
+    read_file_bounded,
 )
 
 # Use fixtures from conftest: policy, artifacts, recording_opener
@@ -41,6 +42,13 @@ def test_chat_payload_has_no_unsupported_store_flag():
 def test_missing_model_binding_fails_loudly():
     with pytest.raises(ConfigError, match="no model bound"):
         resolve_model("AGENT_DOMAIN_RESEARCHER", None, {})
+
+
+def test_transport_file_reader_stops_at_byte_bound(tmp_path):
+    path = tmp_path / "oversized.txt"
+    path.write_bytes(b"x" * 100)
+    with pytest.raises(TransportError, match="exceeds"):
+        read_file_bounded(path, 10, "instructions")
 
 
 def test_flag_environment_default_precedence_is_shared_across_settings():

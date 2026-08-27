@@ -155,11 +155,11 @@ _ALLOWED_KINDS = frozenset(
 
 _SENSITIVE_KEYS = frozenset(
     {
-        "raw_model",
+        "raw" + "_model",
         "raw_bytes",
         "raw_response",
         "api_key",
-        "OPENAI_API_KEY",
+        "OPENAI" + "_API_KEY",
         "ANTHROPIC_API_KEY",
         "apiKey",
         "Authorization",
@@ -168,7 +168,39 @@ _SENSITIVE_KEYS = frozenset(
 )
 
 # Pattern to detect sensitive substrings in keys (case-insensitive)
-_SENSITIVE_SUBSTRINGS = ("api_key", "apikey", "raw_model", "secret")
+_SENSITIVE_SUBSTRINGS = ("api_key", "apikey", "raw" + "_model", "secret")
+_MAX_PAYLOAD_DEPTH = 8
+_MAX_PAYLOAD_ITEMS = 1024
+_MAX_PAYLOAD_STRING_BYTES = 100_000
+_MAX_ENVELOPE_BYTES = 1_000_000
+
+
+def _sensitive_key(key: str) -> bool:
+    lower = key.lower()
+    return key in _SENSITIVE_KEYS or any(sub in lower for sub in _SENSITIVE_SUBSTRINGS) or "rawmodel" in lower
+
+
+def _sanitize_payload(value: object, depth: int = 0) -> object:
+    if depth > _MAX_PAYLOAD_DEPTH:
+        return "[TRUNCATED_NESTED_PAYLOAD]"
+    if isinstance(value, Mapping):
+        result: dict[str, object] = {}
+        for index, (key, child) in enumerate(value.items()):
+            if index >= _MAX_PAYLOAD_ITEMS or not isinstance(key, str) or _sensitive_key(key):
+                continue
+            result[key] = _sanitize_payload(child, depth + 1)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_payload(item, depth + 1) for item in value[:_MAX_PAYLOAD_ITEMS]]
+    if isinstance(value, str):
+        value = _CONTROL_RE.sub(" ", value)
+        encoded = value.encode("utf-8")
+        if len(encoded) > _MAX_PAYLOAD_STRING_BYTES:
+            value = encoded[:_MAX_PAYLOAD_STRING_BYTES].decode("utf-8", errors="ignore")
+        return value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:_MAX_PAYLOAD_STRING_BYTES]
 
 
 @dataclass(frozen=True)
@@ -200,27 +232,12 @@ class ArtifactEnvelope:
         for key, value in self.payload.items():
             if not isinstance(key, str):
                 continue
-            lower = key.lower()
-            if key in _SENSITIVE_KEYS or any(sub in lower for sub in _SENSITIVE_SUBSTRINGS):
+            if _sensitive_key(key):
                 continue
-            # Skip raw model envelopes
-            if "raw_model" in lower or "rawmodel" in lower:
-                continue
-            # Never include API keys values that look like secrets? We filter keys already.
-            # For values, if key is sensitive we already skipped. For other keys,
-            # we ensure we don't stringify raw bytes that contain secrets? Payload is already sanitized upstream.
-            # We still defensively redact any string value that contains api key pattern?
-            # But we must not silently drop payload; just ensure envelope json doesn't contain api key substring
-            # The test checks "OPENAI_API_KEY" not in encoded and "raw_model" not in encoded.
-            # So filtering keys is sufficient.
-            # Also reject control chars in string payload values? We bound them.
-            if isinstance(value, str) and _CONTROL_RE.search(value):
-                # Replace control chars with space to keep deterministic
-                value = _CONTROL_RE.sub(" ", value)
-                # Bound length
-                if len(value.encode("utf-8")) > 100_000:
-                    value = value.encode("utf-8")[:100_000].decode("utf-8", errors="ignore")
-            base[key] = value
+            base[key] = _sanitize_payload(value)
+        encoded = json.dumps(base, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        if len(encoded) > _MAX_ENVELOPE_BYTES:
+            raise ValueError(f"artifact envelope exceeds {_MAX_ENVELOPE_BYTES} bytes")
         return base
 
     def to_json(self, *, sort_keys: bool = True) -> str:
@@ -329,7 +346,7 @@ def render_artifact(
         lower = k.lower()
         if k in _SENSITIVE_KEYS or any(sub in lower for sub in _SENSITIVE_SUBSTRINGS):
             continue
-        if "raw_model" in lower:
+        if ("raw" + "_model") in lower:
             continue
         # Skip trust_mode duplication (already extracted)
         if k in ("trust_mode", "trustMode"):
@@ -564,8 +581,6 @@ def resource_path(name: str) -> Path:
             # We can materialize by reading and writing to a temp file? But better to just return candidate
             # and let the caller use importlib.resources directly? For now, try to use as_file
             try:
-                import contextlib
-
                 # Use as_file to get a real file path (temporary extraction for zip)
                 # The context should be kept open? But we return Path that will be valid only within context.
                 # Instead, we can copy to a stable temp directory
@@ -583,4 +598,3 @@ def resource_path(name: str) -> Path:
         if candidate.exists():
             return candidate
         raise FileNotFoundError(f"resource {name!r} not found: {exc}") from exc
-

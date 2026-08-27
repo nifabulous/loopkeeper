@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import json
 import re
+import argparse
+import os
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import IO
 
 from .errors import ConfigError, TransportError
@@ -70,6 +74,22 @@ def remaining_seconds(job_deadline_epoch: int | None) -> float:
         return float("inf")
     remaining = float(job_deadline_epoch) - time.time() - POSTING_HEADROOM_SECONDS
     return remaining
+
+
+def read_file_bounded(path: Path, max_bytes: int, label: str) -> bytes:
+    """Read at most ``max_bytes + 1`` bytes so oversized inputs fail early."""
+    if not isinstance(path, Path) or not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
+        raise ConfigError("bounded file read requires a Path and positive byte limit")
+    if not isinstance(label, str) or not label:
+        raise ConfigError("bounded file read requires a label")
+    try:
+        with path.open("rb") as stream:
+            data = stream.read(max_bytes + 1)
+    except OSError as exc:
+        raise TransportError(f"could not read {label}: {exc}") from exc
+    if len(data) > max_bytes:
+        raise TransportError(f"{label} exceeds {max_bytes} bytes")
+    return data
 
 
 def resolve_api_url(api_style: str, override: str | None) -> str:
@@ -370,3 +390,75 @@ def request_model(
         except TransportError:
             # Second failure – do not retry again
             raise
+
+
+def _transport_cli(argv: list[str] | None = None) -> int:
+    """Small bounded CLI used by the trusted GitHub adapter.
+
+    Keeping this entry point beside the provider-neutral transport means shell
+    adapters do not need a provider-specific compatibility script.  All input
+    and output files are explicitly bounded and the raw model response is
+    written only to the requested output path.
+    """
+    parser = argparse.ArgumentParser(prog="python -m loopkeeper.transport")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--reasoning-effort", default="none")
+    parser.add_argument("--instructions", required=True, type=Path)
+    parser.add_argument("--input", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--max-input-bytes", required=True, type=int)
+    parser.add_argument("--max-output-tokens", required=True, type=int)
+    parser.add_argument("--max-output-bytes", required=True, type=int)
+    parser.add_argument("--request-timeout", required=True, type=int)
+    parser.add_argument("--job-deadline", type=int)
+    parser.add_argument("--require-complete-input", action="store_true")
+    args = parser.parse_args(argv)
+
+    if args.max_input_bytes <= 0 or args.max_output_tokens <= 0 or args.max_output_bytes <= 0:
+        raise ConfigError("transport limits must be positive")
+    instruction_bytes = read_file_bounded(args.instructions, args.max_input_bytes, "instructions")
+    input_bytes = read_file_bounded(args.input, args.max_input_bytes, "input")
+    combined = len(instruction_bytes) + len(input_bytes)
+    if combined > args.max_input_bytes:
+        raise TransportError(
+            f"model input exceeded {args.max_input_bytes} bytes ({combined})"
+        )
+    try:
+        instructions = instruction_bytes.decode("utf-8")
+        input_text = input_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TransportError("model input is not valid UTF-8") from exc
+
+    api_key = os.environ.get("LOOPKEEPER_API_KEY", "")
+    if not api_key:
+        raise ConfigError("LOOPKEEPER_API_KEY is required")
+    config = TransportConfig(
+        api_style=os.environ.get("LOOPKEEPER_API_STYLE", "responses"),
+        base_url=os.environ.get("LOOPKEEPER_API_BASE_URL"),
+        api_key=api_key,
+        request_timeout=args.request_timeout,
+        job_deadline_epoch=args.job_deadline,
+        retry_unestablished_connection=True,
+    )
+    request = ModelRequest(
+        instructions=instructions,
+        input_text=input_text,
+        model=args.model,
+        reasoning_effort=args.reasoning_effort,
+        max_output_tokens=args.max_output_tokens,
+        max_output_bytes=args.max_output_bytes,
+    )
+    response = request_model(request, config)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = args.output.with_name(f".{args.output.name}.tmp")
+    temporary.write_text(response.text, encoding="utf-8")
+    temporary.replace(args.output)
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by shell adapters
+    try:
+        raise SystemExit(_transport_cli())
+    except (ConfigError, TransportError) as exc:
+        print(f"loopkeeper transport: {exc}", file=sys.stderr)
+        raise SystemExit(2 if isinstance(exc, ConfigError) else 3) from None

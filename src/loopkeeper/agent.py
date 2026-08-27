@@ -79,6 +79,7 @@ class AgentConfig:
     max_input_bytes: int
     max_output_tokens: int
     max_output_bytes: int
+    reasoning_effort: str = "none"
 
     def __post_init__(self):
         if not isinstance(self.model, str) or not self.model.strip():
@@ -91,6 +92,10 @@ class AgentConfig:
             raise ConfigError("max_output_tokens must be positive int")
         if not isinstance(self.max_output_bytes, int) or isinstance(self.max_output_bytes, bool) or self.max_output_bytes <= 0:
             raise ConfigError("max_output_bytes must be positive int")
+        from .transport import EFFORTS
+
+        if self.reasoning_effort not in EFFORTS:
+            raise ConfigError(f"reasoning_effort must be one of {sorted(EFFORTS)}")
         # Coherence: bytes must be reachable at token cap
         from .transport import BYTES_PER_TOKEN
 
@@ -150,6 +155,9 @@ def _validate_manifest_and_attestation(manifest: Mapping[str, object], trusted_r
         from .errors import ManifestError
 
         raise ManifestError("manifest must be a mapping")
+    trust = manifest.get("trust")
+    if isinstance(trust, Mapping) and trust.get("mode") == "github-forge-verified":
+        raise TrustError("github-forge-verified manifests must be executed by the GitHub adapter")
 
     # Derive dummy but distinct roots for validation.
     # If the reader carries a real root, use it; otherwise use distinct temp roots.
@@ -260,18 +268,9 @@ def _prepare_task_input(task_text: str, remaining_bytes: int) -> str:
     """
     if not isinstance(task_text, str):
         raise TypeError("task_text must be str")
-    from .untrusted import wrap_untrusted
-    from .truncate import truncate_utf8
+    from .untrusted import wrap_untrusted_bounded
 
-    # Wrap with defanging; wrap_untrusted already defangs
-    wrapped = wrap_untrusted("task", task_text)
-    # Bound to remaining bytes, truncating with marker if needed
-    if len(wrapped.encode("utf-8")) > remaining_bytes:
-        # Truncate the inner task_text first to preserve wrapper structure?
-        # For simplicity and determinism, truncate the wrapped block directly
-        # (truncate_utf8 handles UTF-8 safely and adds marker)
-        wrapped = truncate_utf8(wrapped, remaining_bytes)
-    return wrapped
+    return wrap_untrusted_bounded("task", task_text, remaining_bytes)
 
 
 def resolve_agent_model(agent_name: str, override: str | None = None, env: Mapping[str, str] | None = None) -> str:
@@ -377,7 +376,7 @@ def run_agent(request: AgentRequest, config: AgentConfig) -> AgentResult:
         instructions=definition.body,
         input_text=task_block,
         model=model_to_use,
-        reasoning_effort="none",
+        reasoning_effort=getattr(config, "reasoning_effort", "none"),
         max_output_tokens=config.max_output_tokens,
         max_output_bytes=config.max_output_bytes,
     )

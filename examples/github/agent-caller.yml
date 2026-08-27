@@ -1,0 +1,29 @@
+# LOOPKEEPER-TEMPLATE: replace the fixture repository and release SHA before copying.
+name: Loopkeeper Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent_name:
+        description: Trusted agent definition name
+        required: true
+        type: string
+      task_text:
+        description: Untrusted task text
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  agent:
+    uses: example-org/loopkeeper/.github/workflows/agent.yml@0123456789abcdef0123456789abcdef01234567
+    with:
+      consumer_repo: ${{ github.repository }}
+      loopkeeper_repo: example-org/loopkeeper
+      loopkeeper_sha: 0123456789abcdef0123456789abcdef01234567
+      agent_name: ${{ inputs.agent_name }}
+      task_text: ${{ inputs.task_text }}
+    secrets:
+      model_api_key: ${{ secrets.LOOPKEEPER_API_KEY }}

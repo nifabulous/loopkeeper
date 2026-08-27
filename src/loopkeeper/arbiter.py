@@ -7,7 +7,6 @@ network, or model calls — those live in the adapter.
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -283,7 +282,6 @@ def extract_trailer(body: str) -> Tuple[Optional[dict], Optional[str]]:
     # Determine which marker present
     if count_codex == 1:
         open_seq = "<!-- codex-verdict:"
-        alt_open = "<!-- loopkeeper-verdict:"
         # also need to ensure not mixed - but total==1 already
     else:
         open_seq = "<!-- loopkeeper-verdict:"
@@ -977,4 +975,3 @@ def decide(history, config: ArbiterConfig) -> Decision:
 # For validation before folding, expose needs_human helper
 def _needs_human(error_code, round_count, detail=""):
     return _result(CONTINUE, error_code, True, round_count, detail=detail)
-

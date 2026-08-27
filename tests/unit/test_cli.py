@@ -43,10 +43,15 @@ def _compute_signature(secret: bytes, manifest_sha256: str, repo: str, head_sha:
 
 def sign_manifest_for_fixture(manifest: dict, tmp_path: Path, key_id: str = "test-v1") -> dict:
     """Sign a manifest dict and prepare key file + trusted/untrusted fixtures."""
+    # Generic CLI manifests are caller-attested; forge verification belongs to
+    # the GitHub adapter and is rejected by the generic command handlers.
+    manifest.setdefault("trust", {})["mode"] = "caller-attested"
     # Create key file
     key_file, secret = _make_key_file(tmp_path, key_id=key_id)
     # Ensure env points to key file for CLI
     os.environ["LOOPKEEPER_TRUST_KEY_FILE"] = str(key_file)
+    os.environ.setdefault("LOOPKEEPER_MODEL", "test-model")
+    os.environ.setdefault("LOOPKEEPER_API_KEY", "test-key")
     # Compute digest over unsigned (without verification)
     # Remove verification if present
     unsigned = json.loads(json.dumps(manifest))
