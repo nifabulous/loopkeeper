@@ -9,8 +9,6 @@ on:
       issue_number:
         required: true
         type: string
-  schedule:
-    - cron: "47 3 * * 2,4"
 
 permissions:
   contents: read

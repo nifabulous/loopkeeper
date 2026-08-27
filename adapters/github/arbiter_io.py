@@ -209,8 +209,8 @@ def _collect_with_gh(repo: str, pr: int, trusted_sha: str, bot_login: str) -> Hi
                     diff_files.append(p)
             elif isinstance(f, str):
                 diff_files.append(f)
-    except Exception:
-        diff_files = []
+    except Exception as exc:
+        raise CollectionUnavailable("could not read changed files") from exc
 
     # Bounded comment collection: paginate through max_pages=10, per_page=100, with byte caps
     # Use gh api with per_page/page, not --paginate unbounded
@@ -337,7 +337,13 @@ def _collect_with_api(repo: str, pr: int, trusted_sha: str, bot_login: str, api:
     current_head = pr_data.get("headRefOid") or pr_data.get("head_sha") or ""
     if not isinstance(current_head, str) or not _SHA_RE.fullmatch(current_head):
         raise CollectionUnavailable("PR metadata did not contain a valid head SHA")
-    diff_files = api.get_pr_diff_files(repo, pr) if hasattr(api, "get_pr_diff_files") else []
+    if hasattr(api, "get_pr_diff_files"):
+        try:
+            diff_files = api.get_pr_diff_files(repo, pr)
+        except Exception as exc:
+            raise CollectionUnavailable("could not read changed files") from exc
+    else:
+        raise CollectionUnavailable("changed-file reader is unavailable")
 
     all_comments: list[dict] = []
     max_raw_bytes = _bounded_positive_env("LOOPKEEPER_CHECK_MAX_RAW_BYTES", 200_000)
@@ -421,6 +427,8 @@ def post_arbiter_comment(repo: str, pr: int, decision, operator: bool) -> None:
     _validate_pr(pr)
     if decision is None:
         raise ValueError("decision is required")
+    if operator is not True:
+        raise PermissionError("operator argument must be True for arbiter publication")
 
     # Need current head: fetch via gh
     try:

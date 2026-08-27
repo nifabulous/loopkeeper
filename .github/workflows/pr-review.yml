@@ -133,10 +133,6 @@ jobs:
           set -euo pipefail
           [[ "$(git -C consumer rev-parse HEAD)" == "$CONSUMER_TRUSTED_SHA" ]]
           [[ "$(git -C loopkeeper rev-parse HEAD)" == "$LOOPKEEPER_SHA" ]]
-          if [[ -f loopkeeper/release/release-manifest.json ]]; then
-            PYTHONPATH="$GITHUB_WORKSPACE/loopkeeper/src" python3 -c \
-              'from pathlib import Path; from loopkeeper.adapters.github.trust import verify_loopkeeper_checkout; import os; verify_loopkeeper_checkout(Path("loopkeeper"), os.environ["LOOPKEEPER_SHA"], Path("loopkeeper/release/release-manifest.json"))'
-          fi
 
       - name: Run read-only review
         working-directory: consumer
@@ -161,6 +157,9 @@ jobs:
           LOOPKEEPER_EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha || github.event.workflow_run.head_sha || '' }}
           LOOPKEEPER_CI_WORKFLOW_NAME: ${{ inputs.ci_workflow_name }}
           LOOPKEEPER_CI_WORKFLOW_FILE: ${{ inputs.ci_workflow_file }}
+          LOOPKEEPER_POLICY_PATH: ${{ inputs.policy_path }}
+          LOOPKEEPER_CONTRACT_PATH: ${{ inputs.contract_path }}
+          LOOPKEEPER_CONTEXT_PATH: ${{ inputs.context_path }}
           LOOPKEEPER_OPERATOR: "0"
           LOOPKEEPER_ARTIFACT_DIR: ${{ github.workspace }}/loopkeeper-artifacts
         run: |
@@ -171,6 +170,13 @@ jobs:
           fi
           [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || { echo "a PR number is required" >&2; exit 2; }
           "$LOOPKEEPER_ROOT/adapters/github/review_pr.sh" "$pr_number"
+      - name: Upload immutable review artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loopkeeper-review-${{ github.run_id }}
+          path: ${{ github.workspace }}/loopkeeper-artifacts
+          if-no-files-found: error
+          retention-days: 7
 
   writer:
     if: ${{ inputs.post_comments }}
@@ -203,14 +209,15 @@ jobs:
           set -euo pipefail
           [[ "$(git -C consumer rev-parse HEAD)" == "$CONSUMER_TRUSTED_SHA" ]]
           [[ "$(git -C loopkeeper rev-parse HEAD)" == "$LOOPKEEPER_SHA" ]]
-          if [[ -f loopkeeper/release/release-manifest.json ]]; then
-            PYTHONPATH="$GITHUB_WORKSPACE/loopkeeper/src" python3 -c \
-              'from pathlib import Path; from loopkeeper.adapters.github.trust import verify_loopkeeper_checkout; import os; verify_loopkeeper_checkout(Path("loopkeeper"), os.environ["LOOPKEEPER_SHA"], Path("loopkeeper/release/release-manifest.json"))'
-          fi
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      - name: Download immutable review artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: loopkeeper-review-${{ github.run_id }}
+          path: ${{ github.workspace }}/loopkeeper-review-artifact
       - name: Run explicitly enabled writer
         working-directory: consumer
         env:
@@ -218,7 +225,7 @@ jobs:
           GH_REPO: ${{ inputs.consumer_repo }}
           LOOPKEEPER_ROOT: ${{ github.workspace }}/loopkeeper
           PYTHONPATH: ${{ github.workspace }}/loopkeeper/src
-          LOOPKEEPER_API_KEY: ${{ secrets.model_api_key }}
+          LOOPKEEPER_REVIEW_ARTIFACT: ${{ github.workspace }}/loopkeeper-review-artifact/review.md
           LOOPKEEPER_REVIEW_ENABLED: "true"
           LOOPKEEPER_TRUSTED_SHA: ${{ needs.resolve.outputs.consumer_trusted_sha }}
           LOOPKEEPER_DEFAULT_BRANCH: ${{ needs.resolve.outputs.consumer_default_branch }}

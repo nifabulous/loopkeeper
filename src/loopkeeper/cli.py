@@ -116,6 +116,12 @@ class _FsTrustedReader:
     def read_text(self, path: str, max_bytes: int) -> str:
         from .paths import resolve_bounded_path
 
+        candidate = Path(path)
+        if candidate.is_absolute():
+            try:
+                path = str(candidate.resolve().relative_to(self.root.resolve()))
+            except ValueError as exc:
+                raise SecurityError(f"trusted path escapes root: {path!r}") from exc
         p = resolve_bounded_path(path, self.root, max_bytes)
         data = p.read_bytes()
         if len(data) > max_bytes:
@@ -138,6 +144,37 @@ def _read_untrusted_file(root: Path, rel: str, max_bytes: int) -> str | None:
         return None
 
 
+def _reject_generic_forge_mode(trust_mode: str) -> None:
+    if trust_mode == "github-forge-verified":
+        raise TrustError("github-forge-verified manifests must be executed by the GitHub adapter")
+
+
+def _load_trusted_policy(manifest: object, trusted_root: Path):
+    from .policy import load_policy
+
+    if not isinstance(manifest, dict):
+        raise ConfigError("manifest must be an object")
+    trusted_cfg = manifest.get("trusted")
+    policy_rel = trusted_cfg.get("policy") if isinstance(trusted_cfg, dict) else None
+    if not isinstance(policy_rel, str) or not policy_rel.strip():
+        raise ConfigError("trusted.policy is required")
+    policy_path = trusted_root / policy_rel
+    if not policy_path.exists() or not policy_path.is_file():
+        raise ConfigError(f"trusted policy file not found: {policy_rel}")
+    return load_policy(policy_path, trusted_root, _FsTrustedReader(trusted_root))
+
+
+def _require_model_configuration(slot: str):
+    from .model_binding import resolve_model, resolve_settings
+
+    model = resolve_model(slot, None, os.environ)
+    settings = resolve_settings({}, os.environ)
+    api_key = os.environ.get("LOOPKEEPER_API_KEY")
+    if not api_key:
+        raise ConfigError("LOOPKEEPER_API_KEY is required")
+    return model, settings, api_key
+
+
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
@@ -147,12 +184,10 @@ def _cmd_review(args: argparse.Namespace) -> int:
     from .artifacts import Provenance, render_artifact, write_artifacts
     from .manifest import load_manifest
     from .attestation import AttestationVerifier
-    from .model_binding import resolve_model, resolve_settings, Settings
     from .transport import ModelRequest, TransportConfig, request_model
     from .schema import parse_trailer
-    from .policy import load_policy, Policy
     from .prompt import render_review_prompt, UntrustedArtifacts
-    from .redaction import RedactionResult
+    from .redaction import RedactionResult, sanitize_with_metadata
 
     manifest_path = Path(args.manifest)
     output_dir = _get_output_dir(args)
@@ -168,6 +203,8 @@ def _cmd_review(args: argparse.Namespace) -> int:
     trusted_rev = str(trust.get("trusted_revision", ""))
     trust_mode = str(trust.get("mode", "unknown"))
 
+    _reject_generic_forge_mode(trust_mode)
+
     provenance = Provenance(repo=repo or None, head_sha=head_sha or None, trusted_revision=trusted_rev or None)
 
     # Verify attestation if caller-attested
@@ -182,35 +219,7 @@ def _cmd_review(args: argparse.Namespace) -> int:
         verifier = AttestationVerifier()
         verifier.verify(record, manifest, key_file)  # type: ignore[arg-type]
 
-    # Load policy (best effort, fallback to default)
-    policy: Policy
-    try:
-        reader = _FsTrustedReader(trusted_root)
-        # Determine policy path from manifest
-        trusted_cfg = manifest.get("trusted", {})  # type: ignore[assignment]
-        policy_rel = None
-        if isinstance(trusted_cfg, dict):
-            policy_rel = trusted_cfg.get("policy")
-        if isinstance(policy_rel, str) and policy_rel:
-            # Use load_policy which will check confinement
-            policy_path = trusted_root / policy_rel
-            # Try to use load_policy if file exists, else fallback
-            if policy_path.exists():
-                policy = load_policy(policy_path, trusted_root, reader)
-            else:
-                # Try reader directly
-                raise FileNotFoundError
-        else:
-            raise FileNotFoundError
-    except Exception:
-        # Fallback default policy
-        policy = Policy(
-            display_name="Default Review Policy",
-            categories=("functional", "security"),
-            severity_guidance="P1 blocks merge, P2 should be fixed soon, P3 is low risk.",
-            lifecycle_rules="NEW first appearance, OPEN still present, RESOLVED once with evidence.",
-            data_handling="Do not store secrets; prefer identifiers and redacted examples.",
-        )
+    policy = _load_trusted_policy(manifest, trusted_root)
 
     # Load untrusted artifacts (fallback to placeholders if missing)
     untrusted_cfg = manifest.get("untrusted", {})  # type: ignore[assignment]
@@ -223,39 +232,27 @@ def _cmd_review(args: argparse.Namespace) -> int:
             metadata_text = _read_untrusted_file(untrusted_root, meta_rel, 100000)
         if isinstance(diff_rel, str) and diff_rel:
             diff_text = _read_untrusted_file(untrusted_root, diff_rel, 100000)
-    if metadata_text is None:
-        metadata_text = "metadata placeholder"
-    if diff_text is None:
-        diff_text = "diff placeholder"
+    if metadata_text is None or diff_text is None:
+        raise ConfigError("review manifest references unreadable untrusted artifacts")
+
+    metadata_result = sanitize_with_metadata(metadata_text)
+    diff_result = sanitize_with_metadata(diff_text)
+    metadata_text = metadata_result.text
+    diff_text = diff_result.text
+    placeholders = tuple(dict.fromkeys(metadata_result.placeholders + diff_result.placeholders))
 
     # Build prompt (deterministic, bounded)
     # Use RedactionResult with empty placeholders for now
-    redaction = RedactionResult("safe", ())
+    redaction = RedactionResult("safe", placeholders)
     artifacts_untrusted = UntrustedArtifacts(
         metadata=metadata_text,
         diff=diff_text,
         previous_review=None,
         checks=None,
     )
-    try:
-        prompt = render_review_prompt(policy, redaction, artifacts_untrusted)
-    except Exception:
-        # Fallback simple prompt
-        from .prompt import Prompt
+    prompt = render_review_prompt(policy, redaction, artifacts_untrusted)
 
-        prompt = Prompt(instructions=f"# {policy.display_name}\n## Categories\n" + "\n".join(f"- {c}" for c in policy.categories), input_text=f"metadata: {metadata_text}\ndiff: {diff_text}")
-
-    # Resolve model and settings (fallback to dummy if env missing, to allow mocked transport)
-    try:
-        model = resolve_model("review", None, os.environ)
-    except ConfigError:
-        model = "test-model"
-    try:
-        settings = resolve_settings({}, os.environ)
-    except ConfigError:
-        settings = Settings()
-
-    api_key = os.environ.get("LOOPKEEPER_API_KEY") or "test-key-dummy"
+    model, settings, api_key = _require_model_configuration("review")
 
     transport_config = TransportConfig(
         api_style=settings.api_style,
@@ -339,7 +336,6 @@ def _cmd_triage(args: argparse.Namespace) -> int:
     from .artifacts import Provenance, render_artifact, write_artifacts
     from .manifest import load_manifest
     from .attestation import AttestationVerifier
-    from .model_binding import resolve_model, resolve_settings, Settings
     from .transport import ModelRequest, TransportConfig, request_model
     from .schema import parse_trailer
 
@@ -353,6 +349,7 @@ def _cmd_triage(args: argparse.Namespace) -> int:
     head_sha = str(trust.get("head_sha", ""))
     trusted_rev = str(trust.get("trusted_revision", ""))
     trust_mode = str(trust.get("mode", "unknown"))
+    _reject_generic_forge_mode(trust_mode)
     provenance = Provenance(repo=repo or None, head_sha=head_sha or None, trusted_revision=trusted_rev or None)
 
     if trust_mode == "caller-attested":
@@ -366,17 +363,7 @@ def _cmd_triage(args: argparse.Namespace) -> int:
         verifier = AttestationVerifier()
         verifier.verify(record, manifest, key_file)  # type: ignore[arg-type]
 
-    # Resolve model/settings with fallback
-    try:
-        model = resolve_model("triage", None, os.environ)
-    except ConfigError:
-        model = "test-model"
-    try:
-        settings = resolve_settings({}, os.environ)
-    except ConfigError:
-        settings = Settings()
-
-    api_key = os.environ.get("LOOPKEEPER_API_KEY") or "test-key-dummy"
+    model, settings, api_key = _require_model_configuration("triage")
     transport_config = TransportConfig(
         api_style=settings.api_style,
         base_url=settings.api_base_url,
@@ -385,21 +372,26 @@ def _cmd_triage(args: argparse.Namespace) -> int:
         job_deadline_epoch=None,
     )
 
-    # Build minimal prompt for triage
-    instructions = "Triage instructions"
-    input_text = "triage input placeholder"
-    # Try to load policy/untrusted similar to review but simplified
-    try:
-        # Attempt to read untrusted metadata/diff for triage as well
-        untrusted_cfg = manifest.get("untrusted", {})  # type: ignore[assignment]
-        if isinstance(untrusted_cfg, dict):
-            meta_rel = untrusted_cfg.get("metadata")
-            if isinstance(meta_rel, str):
-                txt = _read_untrusted_file(untrusted_root, meta_rel, 100000)
-                if txt:
-                    input_text = txt
-    except Exception:
-        pass
+    from .prompt import UntrustedArtifacts, render_review_prompt
+    from .redaction import RedactionResult, sanitize_with_metadata
+    from .untrusted import wrap_untrusted_bounded
+
+    policy = _load_trusted_policy(manifest, trusted_root)
+    untrusted_cfg = manifest.get("untrusted", {})
+    metadata_rel = untrusted_cfg.get("metadata") if isinstance(untrusted_cfg, dict) else None
+    if not isinstance(metadata_rel, str) or not metadata_rel:
+        raise ConfigError("triage manifest requires untrusted.metadata")
+    metadata_text = _read_untrusted_file(untrusted_root, metadata_rel, 100000)
+    if metadata_text is None:
+        raise ConfigError("triage metadata is unreadable")
+    metadata_result = sanitize_with_metadata(metadata_text)
+    instructions = render_review_prompt(
+        policy,
+        RedactionResult("safe", metadata_result.placeholders),
+        UntrustedArtifacts("", "", None, None),
+    ).instructions
+    metadata_text = metadata_result.text
+    input_text = wrap_untrusted_bounded("issue", metadata_text, min(settings.max_input_bytes, 100000))
 
     model_request = ModelRequest(
         instructions=instructions,
@@ -445,7 +437,6 @@ def _cmd_agent(args: argparse.Namespace) -> int:
     from .agent import AgentConfig, AgentRequest, run_agent
     from .artifacts import Provenance, render_artifact, write_artifacts
     from .manifest import load_manifest
-    from .model_binding import resolve_model, resolve_settings, Settings
     from .transport import TransportConfig
 
     manifest_path = Path(args.manifest)
@@ -459,6 +450,7 @@ def _cmd_agent(args: argparse.Namespace) -> int:
     head_sha = str(trust.get("head_sha", ""))
     trusted_rev = str(trust.get("trusted_revision", ""))
     trust_mode = str(trust.get("mode", "unknown"))
+    _reject_generic_forge_mode(trust_mode)
     provenance = Provenance(repo=repo or None, head_sha=head_sha or None, trusted_revision=trusted_rev or None)
 
     agent_name = getattr(args, "agent_name", None) or os.environ.get("LOOPKEEPER_AGENT_NAME", "domain-researcher")
@@ -466,18 +458,11 @@ def _cmd_agent(args: argparse.Namespace) -> int:
     if task_text is None:
         task_text = os.environ.get("LOOPKEEPER_TASK_TEXT", "")
 
-    try:
-        model = resolve_model(agent_name, None, os.environ)
-    except ConfigError:
-        model = "test-model"
-    try:
-        settings = resolve_settings({}, os.environ)
-    except ConfigError:
-        settings = Settings()
+    model, settings, api_key = _require_model_configuration(agent_name)
     transport_config = TransportConfig(
         api_style=settings.api_style,
         base_url=settings.api_base_url,
-        api_key=os.environ.get("LOOPKEEPER_API_KEY") or "test-key-dummy",
+        api_key=api_key,
         request_timeout=settings.request_timeout,
         job_deadline_epoch=None,
     )
@@ -494,6 +479,7 @@ def _cmd_agent(args: argparse.Namespace) -> int:
             max_input_bytes=settings.max_input_bytes,
             max_output_tokens=settings.max_output_tokens,
             max_output_bytes=settings.max_output_bytes,
+            reasoning_effort=settings.reasoning_effort,
         ),
     )
     sanitized = _sanitize_model_text(result.text)

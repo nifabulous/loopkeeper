@@ -4,8 +4,10 @@ Loopkeeper separates trusted control-plane material from untrusted PR, issue,
 and task content. GitHub workflows check out the consumer default branch and
 the Loopkeeper release into different directories. The forge resolves the
 consumer default-branch SHA; a caller hint is diagnostic only. The reusable
-workflow accepts only immutable full-commit SHA pins and verifies the checked
-out Loopkeeper commit against its release manifest before invoking adapters.
+workflow accepts only immutable full-commit SHA pins and verifies both checked
+out commits before invoking adapters. Release provenance is generated after
+the immutable build and published as a separate artifact; the adapter never
+trusts a self-referential manifest from the checked-out tree.
 
 Generic CI uses a caller-attested manifest. The protected key file is selected
 from `LOOPKEEPER_TRUST_KEY_FILE`, never from a manifest or untrusted artifact.

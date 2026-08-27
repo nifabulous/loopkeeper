@@ -11,7 +11,7 @@ if [[ "${LOOPKEEPER_REVIEW_ENABLED:-false}" != "true" ]]; then
   exit 0
 fi
 
-if [[ -z "${LOOPKEEPER_API_KEY:-}" ]]; then
+if [[ -z "${LOOPKEEPER_API_KEY:-}" && -z "${LOOPKEEPER_REVIEW_ARTIFACT:-}" ]]; then
   echo "LOOPKEEPER_REVIEW_ENABLED=true but LOOPKEEPER_API_KEY is missing." >&2
   exit 1
 fi
@@ -69,7 +69,11 @@ fi
 : "${LOOPKEEPER_JOB_DEADLINE_EPOCH:=$(( $(date +%s) + LOOPKEEPER_JOB_TIMEOUT_SECONDS ))}"
 LOOPKEEPER_BOT_LOGIN="${LOOPKEEPER_BOT_LOGIN:-github-actions[bot]}"
 : "${LOOPKEEPER_CI_WORKFLOW_FILE:=ci.yml}"
+: "${LOOPKEEPER_CI_WORKFLOW_FILE_BASENAME:=${LOOPKEEPER_CI_WORKFLOW_FILE##*/}}"
 : "${LOOPKEEPER_CI_WORKFLOW_NAME:=CI}"
+: "${LOOPKEEPER_POLICY_PATH:=.github/codex/review-policy.md}"
+: "${LOOPKEEPER_CONTEXT_PATH:=.github/codex/context-files.txt}"
+: "${LOOPKEEPER_CONTRACT_PATH:=}"
 : "${LOOPKEEPER_CI_DISCOVERY_SECONDS:=60}"
 : "${LOOPKEEPER_CI_DISCOVERY_POLL_SECONDS:=10}"
 : "${LOOPKEEPER_CHECK_MAX_ITEMS:=50}"
@@ -123,17 +127,57 @@ if [[ ! "$LOOPKEEPER_CI_WORKFLOW_NAME" =~ ^[A-Za-z0-9._[:space:]-]+$ ]]; then
   echo "LOOPKEEPER_CI_WORKFLOW_NAME contains unsupported characters." >&2
   exit 2
 fi
+for trusted_path in "$LOOPKEEPER_POLICY_PATH" "$LOOPKEEPER_CONTEXT_PATH"; do
+  if [[ ! "$trusted_path" =~ ^[A-Za-z0-9._/-]+$ || "$trusted_path" == /* || "$trusted_path" == *..* || "$trusted_path" == *:* ]]; then
+    echo "trusted policy/context paths must be safe relative paths." >&2
+    exit 2
+  fi
+done
+if [[ -n "$LOOPKEEPER_CONTRACT_PATH" && ( ! "$LOOPKEEPER_CONTRACT_PATH" =~ ^[A-Za-z0-9._/-]+$ || "$LOOPKEEPER_CONTRACT_PATH" == /* || "$LOOPKEEPER_CONTRACT_PATH" == *..* || "$LOOPKEEPER_CONTRACT_PATH" == *:* ) ]]; then
+  echo "LOOPKEEPER_CONTRACT_PATH must be a safe relative path." >&2
+  exit 2
+fi
 
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
-METADATA="$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json number,title,body,url,state,baseRefName,headRefName,headRefOid)"
+capture_bounded_stream() {
+  local max_bytes="$1"
+  local description="$2"
+  python3 -c '
+import sys
+limit = int(sys.argv[1])
+description = sys.argv[2]
+data = bytearray()
+while True:
+    chunk = sys.stdin.buffer.read(min(65536, limit + 1 - len(data)))
+    if not chunk:
+        break
+    data.extend(chunk)
+    if len(data) > limit:
+        print(f"{description} exceeds its byte limit ({limit})", file=sys.stderr)
+        raise SystemExit(1)
+sys.stdout.buffer.write(data)
+' "$max_bytes" "$description"
+}
+
+METADATA_FILE="$(mktemp)"
+if ! gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json number,title,body,url,state,baseRefName,headRefName,headRefOid \
+  | capture_bounded_stream "$LOOPKEEPER_CHECK_MAX_RAW_BYTES" "PR metadata" >"$METADATA_FILE"; then
+  echo "PR metadata was unavailable or exceeded its byte bound; refusing to review." >&2
+  exit 4
+fi
+METADATA="$(<"$METADATA_FILE")"
 PR_STATE="$(jq -r '.state // empty' <<<"$METADATA")"
 if [[ "$PR_STATE" != "OPEN" ]]; then
   echo "PR #${PR_NUMBER} is not open (state=${PR_STATE:-unknown}); skipping review."
   exit 0
 fi
 HEAD_SHA="$(jq -r '.headRefOid' <<<"$METADATA")"
+if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "GitHub returned an invalid PR head SHA; refusing to review." >&2
+  exit 4
+fi
 if [[ -n "${LOOPKEEPER_EXPECTED_HEAD_SHA:-}" ]]; then
   if [[ ! "$LOOPKEEPER_EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
     echo "LOOPKEEPER_EXPECTED_HEAD_SHA must be a full lowercase commit SHA." >&2
@@ -144,10 +188,48 @@ if [[ -n "${LOOPKEEPER_EXPECTED_HEAD_SHA:-}" ]]; then
     exit 0
   fi
 fi
+
+if [[ "${LOOPKEEPER_EVENT_NAME:-}" == "workflow_run" ]]; then
+  EVENT_PATH="${GITHUB_EVENT_PATH:-}"
+  if [[ -z "$EVENT_PATH" || ! -f "$EVENT_PATH" ]]; then
+    echo "workflow_run event payload is unavailable; refusing to select a PR." >&2
+    exit 4
+  fi
+  SOURCE_EVENT="$(jq -r '.workflow_run.event // empty' "$EVENT_PATH" 2>/dev/null || true)"
+  RUN_HEAD_SHA="$(jq -r '.workflow_run.head_sha // empty' "$EVENT_PATH" 2>/dev/null || true)"
+  RUN_PRS_JSON="$(jq -c '[.workflow_run.pull_requests[]?.number? | select(type == "number" and . > 0)]' "$EVENT_PATH" 2>/dev/null || true)"
+  if [[ -z "$RUN_PRS_JSON" || "$RUN_PRS_JSON" == "null" ]]; then
+    echo "workflow_run event payload has no valid PR association; refusing to review." >&2
+    exit 4
+  fi
+  if ! TARGET_RESULT="$(python3 - "$SOURCE_EVENT" "$RUN_HEAD_SHA" "$HEAD_SHA" "$PR_STATE" "$PR_NUMBER" "$RUN_PRS_JSON" <<'PY'
+import json
+import sys
+from loopkeeper.adapters.github.workflow_identity import select_workflow_run_target
+
+source_event, run_head, current_head, state, pr, numbers = sys.argv[1:]
+result = select_workflow_run_target(
+    "workflow_run", source_event, run_head, current_head, state, int(pr), json.loads(numbers)
+)
+print(result)
+PY
+)"; then
+    echo "workflow_run target validation failed; refusing to review." >&2
+    exit 4
+  fi
+  if [[ "$TARGET_RESULT" != "reviewable" ]]; then
+    echo "workflow_run is not uniquely associated with the current open PR head; skipping review." >&2
+    exit 0
+  fi
+fi
 HEAD_REF_NAME="$(jq -r '.headRefName' <<<"$METADATA")"
-CONTRACT_SLUG="${HEAD_REF_NAME//\//-}"
-CONTRACT_HASH="$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "$HEAD_REF_NAME")"
-CONTRACT_PATH="docs/contracts/${CONTRACT_SLUG}-${CONTRACT_HASH}.md"
+if [[ -z "$LOOPKEEPER_CONTRACT_PATH" ]]; then
+  CONTRACT_SLUG="${HEAD_REF_NAME//\//-}"
+  CONTRACT_HASH="$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "$HEAD_REF_NAME")"
+  CONTRACT_PATH="docs/contracts/${CONTRACT_SLUG}-${CONTRACT_HASH}.md"
+else
+  CONTRACT_PATH="$LOOPKEEPER_CONTRACT_PATH"
+fi
 MARKER="<!-- loopkeeper-pr-review:${PR_NUMBER}:${HEAD_SHA} -->"
 # Evidence state marker: fallback (direct) vs ci (workflow_run with exact-head CI evidence)
 # A direct-event fallback may run before CI run exists; this marker tells later workflow_run that eligible for replacement once CI evidence exists.
@@ -252,7 +334,7 @@ resolve_ci_workflow_id() {
     page=$((page + 1))
   done
   (( page <= max_pages )) || return 1
-  jq -s -r --arg name "$LOOPKEEPER_CI_WORKFLOW_NAME" --arg file "$LOOPKEEPER_CI_WORKFLOW_FILE" '
+  jq -s -r --arg name "$LOOPKEEPER_CI_WORKFLOW_NAME" --arg file "$LOOPKEEPER_CI_WORKFLOW_FILE_BASENAME" '
     map(select(.name == $name and (.state // "") == "active"
       and ((.path // "") | sub("^\\.github/workflows/"; "") | split("/")[-1]) == $file))
     | if length == 1 then .[0].id else empty end
@@ -272,14 +354,25 @@ if [[ "${LOOPKEEPER_EVENT_NAME:-}" == "pull_request_target" && "${LOOPKEEPER_PR_
   fi
   while :; do
     [[ "$CI_WORKFLOW_ID" =~ ^[0-9]+$ ]] || break
-    ci_runs_payload="$(gh api \
+    ci_runs_file="$TEMP_DIR/ci-runs.json"
+    if ! gh api \
       "repos/${GH_REPO}/actions/workflows/${CI_WORKFLOW_ID}/runs?head_sha=${HEAD_SHA}&per_page=100" \
-      2>/dev/null || true)"
-    ci_runs="$(jq -r --arg head "$HEAD_SHA" --arg pr "$PR_NUMBER" \
+      2>/dev/null | capture_bounded_stream "$LOOPKEEPER_CHECK_MAX_RAW_BYTES" "CI runs" >"$ci_runs_file"; then
+      echo "CI run discovery was unavailable for ${HEAD_SHA}; refusing to manufacture fallback evidence." >&2
+      exit 4
+    fi
+    if ! jq -e 'type == "object" and (.workflow_runs | type) == "array"' "$ci_runs_file" >/dev/null 2>&1; then
+      echo "CI run discovery returned malformed evidence; refusing to manufacture fallback evidence." >&2
+      exit 4
+    fi
+    if ! ci_runs="$(jq -r --arg head "$HEAD_SHA" --arg pr "$PR_NUMBER" \
       '[.workflow_runs[]?
        | select(.event == "pull_request" and .head_sha == $head)
        | select(([.pull_requests[]?.number? | tostring] | index($pr)) != null)]
-       | length' <<<"$ci_runs_payload" 2>/dev/null || true)"
+       | length' "$ci_runs_file")"; then
+      echo "CI run discovery could not be parsed; refusing to manufacture fallback evidence." >&2
+      exit 4
+    fi
     if [[ "$ci_runs" =~ ^[0-9]+$ ]] && (( ci_runs > 0 )); then
       echo "CI run exists for ${HEAD_SHA}; deferring to the CI-completion review."
       exit 0
@@ -401,26 +494,6 @@ print(json.dumps(document, indent=2))
 PY
 }
 
-capture_bounded_stream() {
-  local max_bytes="$1"
-  local description="$2"
-  python3 -c '
-import sys
-limit = int(sys.argv[1])
-description = sys.argv[2]
-data = bytearray()
-while True:
-    chunk = sys.stdin.buffer.read(min(65536, limit + 1 - len(data)))
-    if not chunk:
-        break
-    data.extend(chunk)
-    if len(data) > limit:
-        print(f"{description} exceeds its byte limit ({limit})", file=sys.stderr)
-        raise SystemExit(1)
-sys.stdout.buffer.write(data)
-' "$max_bytes" "$description"
-}
-
 collect_check_runs() {
   local output_file="$1"
   local metadata_file="$2"
@@ -511,7 +584,7 @@ show_trusted() {
 {
   cat "$TEMP_DIR/prompt.txt"
   printf '\n\n## Trusted review policy\n'
-  show_trusted ".github/codex/review-policy.md" 2>/dev/null || show_trusted "examples/relay/review-policy.md" 2>/dev/null || echo "No review policy found."
+  show_trusted "$LOOPKEEPER_POLICY_PATH" 2>/dev/null || show_trusted "examples/relay/review-policy.md" 2>/dev/null || echo "No review policy found."
   CONTRACT_FIRST_LINE=""
   if CONTRACT_CONTENT="$(show_trusted "$CONTRACT_PATH" 2>/dev/null)" && [[ -n "$CONTRACT_CONTENT" ]]; then
     CONTRACT_FIRST_LINE="$(grep -m1 -v '^[[:space:]]*$' <<<"$CONTRACT_CONTENT" || true)"
@@ -534,7 +607,7 @@ show_trusted() {
     printf '%s\n' "$context_prefix"
   fi
   context_count=0
-  if ! context_allowlist="$(show_trusted ".github/codex/context-files.txt" 2>/dev/null \
+  if ! context_allowlist="$(show_trusted "$LOOPKEEPER_CONTEXT_PATH" 2>/dev/null \
     | capture_bounded_stream "$LOOPKEEPER_CONTEXT_MAX_BYTES" "trusted context allowlist")" && ! context_allowlist="$(show_trusted "examples/relay/context-files.txt" 2>/dev/null \
     | capture_bounded_stream "$LOOPKEEPER_CONTEXT_MAX_BYTES" "trusted context allowlist")"; then
     context_allowlist=""
@@ -587,18 +660,30 @@ show_trusted() {
   python3 -c "from loopkeeper.untrusted import wrap_untrusted; import sys; sys.stdout.write(wrap_untrusted('verification-results', open(sys.argv[1]).read()))" "$TEMP_DIR/verification-results-sanitized.txt"
 } >"$TEMP_DIR/review-input.md"
 
-python3 -m loopkeeper.transport \
-  --model "$LOOPKEEPER_MODEL" \
-  --reasoning-effort "$LOOPKEEPER_REASONING_EFFORT" \
-  --instructions "$TEMP_DIR/review-instructions.md" \
-  --input "$TEMP_DIR/review-input.md" \
-  --output "$TEMP_DIR/review.md" \
-  --max-input-bytes "$LOOPKEEPER_MAX_INPUT_BYTES" \
-  --require-complete-input \
-  --max-output-tokens "$LOOPKEEPER_MAX_OUTPUT_TOKENS" \
-  --max-output-bytes "$LOOPKEEPER_MAX_OUTPUT_BYTES" \
-  --request-timeout "$LOOPKEEPER_REQUEST_TIMEOUT" \
-  --job-deadline "$LOOPKEEPER_JOB_DEADLINE_EPOCH"
+if [[ -n "${LOOPKEEPER_REVIEW_ARTIFACT:-}" ]]; then
+  [[ -f "$LOOPKEEPER_REVIEW_ARTIFACT" ]] || {
+    echo "immutable review artifact is missing" >&2
+    exit 4
+  }
+  if ! capture_bounded_stream "$LOOPKEEPER_MAX_OUTPUT_BYTES" "review artifact" \
+    <"$LOOPKEEPER_REVIEW_ARTIFACT" >"$TEMP_DIR/review.md"; then
+    echo "immutable review artifact is unavailable or exceeds the output bound" >&2
+    exit 4
+  fi
+else
+  python3 -m loopkeeper.transport \
+    --model "$LOOPKEEPER_MODEL" \
+    --reasoning-effort "$LOOPKEEPER_REASONING_EFFORT" \
+    --instructions "$TEMP_DIR/review-instructions.md" \
+    --input "$TEMP_DIR/review-input.md" \
+    --output "$TEMP_DIR/review.md" \
+    --max-input-bytes "$LOOPKEEPER_MAX_INPUT_BYTES" \
+    --require-complete-input \
+    --max-output-tokens "$LOOPKEEPER_MAX_OUTPUT_TOKENS" \
+    --max-output-bytes "$LOOPKEEPER_MAX_OUTPUT_BYTES" \
+    --request-timeout "$LOOPKEEPER_REQUEST_TIMEOUT" \
+    --job-deadline "$LOOPKEEPER_JOB_DEADLINE_EPOCH"
+fi
 
 if [[ ! -s "$TEMP_DIR/review.md" ]]; then
   echo "Loopkeeper returned an empty review for PR #${PR_NUMBER}." >&2
@@ -645,14 +730,18 @@ rendered = render_comment(model_text, marker, evidence, max_bytes)
 open("$TEMP_DIR/comment.md", "w", encoding="utf-8").write(rendered)
 PY
 
-# Read-only runs publish artifacts only; an explicitly enabled caller may set
-# LOOPKEEPER_OPERATOR=1 to perform the comment write.
-if [[ "${LOOPKEEPER_OPERATOR:-}" != "1" ]]; then
+save_review_artifacts() {
   if [[ -n "${LOOPKEEPER_ARTIFACT_DIR:-}" ]]; then
     mkdir -p "$LOOPKEEPER_ARTIFACT_DIR"
     cp "$TEMP_DIR/review.md" "$LOOPKEEPER_ARTIFACT_DIR/review.md"
     cp "$TEMP_DIR/comment.md" "$LOOPKEEPER_ARTIFACT_DIR/comment.md"
   fi
+}
+save_review_artifacts
+
+# Read-only runs publish artifacts only; an explicitly enabled caller may set
+# LOOPKEEPER_OPERATOR=1 to perform the comment write.
+if [[ "${LOOPKEEPER_OPERATOR:-}" != "1" ]]; then
   echo "Loopkeeper review completed in read-only mode; no comment write requested."
   exit 0
 fi

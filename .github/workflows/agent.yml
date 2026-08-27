@@ -43,21 +43,102 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$(git -C loopkeeper rev-parse HEAD)" == "$LOOPKEEPER_SHA" ]]
-          if [[ -f loopkeeper/release/release-manifest.json ]]; then
-            PYTHONPATH="$GITHUB_WORKSPACE/loopkeeper/src" python3 -c \
-              'from pathlib import Path; from loopkeeper.adapters.github.trust import verify_loopkeeper_checkout; import os; verify_loopkeeper_checkout(Path("loopkeeper"), os.environ["LOOPKEEPER_SHA"], Path("loopkeeper/release/release-manifest.json"))'
-          fi
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      - name: Prepare caller-attested agent manifest
+        working-directory: loopkeeper
+        env:
+          AGENT_NAME: ${{ inputs.agent_name }}
+          CONSUMER_REPO: ${{ inputs.consumer_repo }}
+          LOOPKEEPER_SHA: ${{ inputs.loopkeeper_sha }}
+          PYTHONPATH: ${{ github.workspace }}/loopkeeper/src
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, hmac, json, os, re, secrets, stat
+          from pathlib import Path
+          from loopkeeper.attestation import unsigned_manifest_digest
+
+          name = os.environ["AGENT_NAME"]
+          if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", name):
+              raise SystemExit("agent_name has an unsafe shape")
+          root = Path.cwd().parent
+          trusted = root / "agent-trusted"
+          untrusted = root / "agent-untrusted"
+          trusted.mkdir(parents=True, exist_ok=True)
+          (trusted / "agents").mkdir(parents=True, exist_ok=True)
+          untrusted.mkdir(parents=True, exist_ok=True)
+          source = Path("src/loopkeeper/resources/agents") / f"{name}.md"
+          if not source.is_file():
+              raise SystemExit(f"unknown trusted agent definition: {name}")
+          (trusted / "agents" / source.name).write_bytes(source.read_bytes())
+          (trusted / "policy.md").write_text(
+              "# Loopkeeper Agent Policy\n"
+              "## Categories\nfunctional security\n"
+              "## Severity\nPreserve trust boundaries.\n"
+              "## Lifecycle\nReturn bounded results.\n"
+              "## Data handling\nDo not store secrets.\n",
+              encoding="utf-8",
+          )
+          (untrusted / "metadata.json").write_text("{}\n", encoding="utf-8")
+          (untrusted / "diff.patch").write_text("", encoding="utf-8")
+
+          manifest = json.loads(Path("src/loopkeeper/resources/manifests/agent.json").read_text(encoding="utf-8"))
+          manifest["trust"] = {
+              "mode": "caller-attested",
+              "repo": os.environ["CONSUMER_REPO"],
+              "head_sha": os.environ["LOOPKEEPER_SHA"],
+              "trusted_revision": os.environ["LOOPKEEPER_SHA"],
+          }
+          manifest["trusted"] = {"policy": "policy.md", "context_files": []}
+          manifest["untrusted"] = {"metadata": "metadata.json", "diff": "diff.patch"}
+          key = secrets.token_bytes(32)
+          key_path = root / "agent-trust-keys.json"
+          key_path.write_text(json.dumps({"schema": 1, "keys": {"workflow-ephemeral": base64.b64encode(key).decode()}}), encoding="utf-8")
+          key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+          digest = unsigned_manifest_digest(manifest)
+          message = f"loopkeeper-manifest-v1\n{digest}\n{manifest['trust']['repo']}\n{manifest['trust']['head_sha']}\n{manifest['trust']['trusted_revision']}".encode()
+          manifest["trust"]["verification"] = {
+              "method": "hmac-sha256",
+              "record": {
+                  "schema": 1,
+                  "method": "hmac-sha256",
+                  "key_id": "workflow-ephemeral",
+                  "repo": manifest["trust"]["repo"],
+                  "head_sha": manifest["trust"]["head_sha"],
+                  "trusted_revision": manifest["trust"]["trusted_revision"],
+                  "manifest_sha256": digest,
+                  "signature": hmac.new(key, message, hashlib.sha256).hexdigest(),
+              },
+          }
+          (root / "agent-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+          PY
       - name: Run unprivileged agent CLI
         working-directory: loopkeeper
         env:
           LOOPKEEPER_API_KEY: ${{ secrets.model_api_key }}
           LOOPKEEPER_AGENT_NAME: ${{ inputs.agent_name }}
           LOOPKEEPER_TASK_TEXT: ${{ inputs.task_text }}
+          LOOPKEEPER_MODEL: ${{ vars.LOOPKEEPER_MODEL || 'gpt-5.3-codex' }}
+          LOOPKEEPER_REASONING_EFFORT: ${{ vars.LOOPKEEPER_REASONING_EFFORT || 'medium' }}
+          LOOPKEEPER_TRUST_KEY_FILE: ${{ github.workspace }}/agent-trust-keys.json
+          PYTHONPATH: ${{ github.workspace }}/loopkeeper/src
         run: |
           set -euo pipefail
-          echo "Agent dispatch is intentionally artifact-only; no repository code is executed."
-          python3 -m loopkeeper --version
+          mkdir -p "$GITHUB_WORKSPACE/agent-artifacts"
+          python3 -m loopkeeper agent \
+            --manifest "$GITHUB_WORKSPACE/agent-manifest.json" \
+            --trusted-root "$GITHUB_WORKSPACE/agent-trusted" \
+            --untrusted-root "$GITHUB_WORKSPACE/agent-untrusted" \
+            --agent-name "$LOOPKEEPER_AGENT_NAME" \
+            --task-text "$LOOPKEEPER_TASK_TEXT" \
+            --output-dir "$GITHUB_WORKSPACE/agent-artifacts"
+      - name: Upload agent artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loopkeeper-agent-${{ github.run_id }}
+          path: ${{ github.workspace }}/agent-artifacts
+          if-no-files-found: error
+          retention-days: 7

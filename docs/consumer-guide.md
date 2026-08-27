@@ -15,6 +15,9 @@ publishing; that file adds `pull-requests: write` and sets `post_comments: true`
 The caller owns all triggers. The reusable workflow accepts only
 `workflow_call`, resolves the consumer default-branch SHA from GitHub, and
 checks out the consumer and Loopkeeper repositories into separate directories.
+The shipped caller templates intentionally omit schedules because a scheduled
+event has no single PR or issue target; add a scheduler only if it enumerates
+and dispatches explicit targets.
 The `loopkeeper_sha` in the `uses:` pin and the input must be the same full
 commit SHA. A `consumer_trusted_sha` is an optional diagnostic hint, never a
 replacement for forge resolution.

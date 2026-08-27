@@ -22,7 +22,14 @@ def prepare_roots(tmp_path: Path, manifest: dict) -> None:
         if isinstance(policy, str) and policy:
             path = trusted / policy
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("# Policy\n## functional\ncontent\n", encoding="utf-8")
+            path.write_text(
+                "# Policy\n"
+                "## Categories\nfunctional security\n"
+                "## Severity\nP1 blocks merge.\n"
+                "## Lifecycle\nTrack findings across rounds.\n"
+                "## Data handling\nDo not store secrets.\n",
+                encoding="utf-8",
+            )
         for rel in trusted_cfg.get("context_files", []) or []:
             if isinstance(rel, str) and rel:
                 path = trusted / rel
@@ -55,6 +62,8 @@ def sign_manifest(tmp_path: Path, manifest: dict, key_id: str = "integration-v1"
     except OSError:
         pass
     os.environ["LOOPKEEPER_TRUST_KEY_FILE"] = str(key_file)
+    os.environ.setdefault("LOOPKEEPER_MODEL", "test-model")
+    os.environ.setdefault("LOOPKEEPER_API_KEY", "test-key")
     digest = unsigned_manifest_digest(manifest)
     trust = manifest["trust"]
     message = f"loopkeeper-manifest-v1\n{digest}\n{trust['repo']}\n{trust['head_sha']}\n{trust['trusted_revision']}".encode()

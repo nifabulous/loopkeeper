@@ -39,6 +39,7 @@ class Redactor(Protocol):
 
 _PLACEHOLDER_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,31}$")
 _MAX_OUTPUT_BYTES = 1_000_000
+_MAX_INPUT_BYTES = 1_000_000
 
 
 def _normalize_placeholders(placeholders: tuple[str, ...] | list[str]) -> tuple[str, ...]:
@@ -342,4 +343,14 @@ def sanitize(text: str, redactor: Redactor | None = None) -> str:
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by shell adapters
-    sys.stdout.write(sanitize(sys.stdin.read()))
+    stream = getattr(sys.stdin, "buffer", sys.stdin)
+    raw = stream.read(_MAX_INPUT_BYTES + 1)
+    if isinstance(raw, bytes):
+        if len(raw) > _MAX_INPUT_BYTES:
+            raise SystemExit(f"input exceeds {_MAX_INPUT_BYTES} bytes")
+        value = raw.decode("utf-8")
+    else:
+        if len(raw.encode("utf-8")) > _MAX_INPUT_BYTES:
+            raise SystemExit(f"input exceeds {_MAX_INPUT_BYTES} bytes")
+        value = raw
+    sys.stdout.write(sanitize(value))

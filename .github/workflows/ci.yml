@@ -64,5 +64,5 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate workflow YAML with pinned actionlint
         run: |
-          echo "actionlint is supplied by the release runner image; reusable workflow refs are checked statically."
-          tests/github/test_automation.sh
+          command -v actionlint >/dev/null 2>&1 || { echo "actionlint is required on the CI runner" >&2; exit 1; }
+          actionlint

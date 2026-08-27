@@ -78,6 +78,14 @@ def test_sdist_excludes_attestation_key_fixture():
         assert not any(name.endswith("tests/fixtures/attestation/trust-keys.json") for name in archive.getnames())
 
 
+def test_release_workflow_publishes_package_and_provenance():
+    raw = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "python -m twine upload dist/*.whl dist/*.tar.gz" in raw
+    assert "actions/upload-artifact@" in raw
+    assert "release-manifest.json" in raw
+    assert "sha256sum" in raw
+
+
 def test_release_tree_contains_no_fixture_secret():
     for path in ROOT.rglob("*"):
         if not path.is_file() or ".git" in path.parts or "tests" in path.parts or "test_release_contract.py" in path.name:

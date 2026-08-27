@@ -11,6 +11,6 @@
   "provenance": {
     "source": "Loopkeeper release pipeline",
     "builder": "GitHub Actions",
-    "note": "The release job replaces commit and package digests with values from the immutable build."
+    "note": "Fixture metadata only; the release job generates authoritative commit and package digests outside the source checkout."
   }
 }

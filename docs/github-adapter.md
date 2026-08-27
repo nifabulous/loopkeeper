@@ -15,10 +15,11 @@ and passes PR content only through the untrusted channel.
 - `loopkeeper_sha` is declared twice in each protected caller:
   once in the `uses:` pin and once as a `workflow_call` input. A static caller
   test requires those literals to match, while the called workflow verifies its
-  Loopkeeper checkout SHA and release-manifest binding (`verify_loopkeeper_checkout`)
-  before invoking scripts. Release-time provenance/signature verification is a
-  separate gate in the release workflow. The called workflow must not accept a
-  branch, tag, or mutable ref as a substitute for either SHA.
+  Loopkeeper checkout SHA before invoking scripts. Release-time provenance is
+  generated and retained as a separate build artifact; a self-referential
+  manifest from the checkout is not treated as a trust anchor. The called
+  workflow must not accept a branch, tag, or mutable ref as a substitute for
+  either SHA.
 - The adapter records both verified roots in the artifact provenance.
 
 ## Bounded reads and retry

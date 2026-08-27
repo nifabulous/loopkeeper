@@ -34,6 +34,32 @@ def test_artifact_envelope_excludes_raw_model_and_api_key():
     assert "OPENAI_API_KEY" not in encoded
 
 
+def test_artifact_envelope_filters_sensitive_keys_recursively():
+    envelope = render_artifact(
+        "review",
+        "complete",
+        provenance("example/project"),
+        {
+            "nested": {"api_key": "SECRET", "safe": "value"},
+            "items": [{"raw_model": "RAW", "safe": "item"}],
+        },
+    )
+    encoded = json.dumps(envelope.to_dict())
+    assert "SECRET" not in encoded
+    assert "RAW" not in encoded
+    assert '"safe": "value"' in encoded
+
+
+def test_artifact_envelope_has_a_global_serialized_size_bound():
+    with pytest.raises(ValueError, match="envelope exceeds"):
+        render_artifact(
+            "review",
+            "complete",
+            provenance("example/project"),
+            {"items": ["x" * 100_000 for _ in range(20)]},
+        ).to_dict()
+
+
 def test_artifact_envelope_includes_required_fields():
     prov = Provenance(repo="example/project", head_sha="abc123", trusted_revision="def456")
     envelope = render_artifact("review", "complete", prov, {"text": "hello", "trust_mode": "caller-attested"})

@@ -169,6 +169,38 @@ _SENSITIVE_KEYS = frozenset(
 
 # Pattern to detect sensitive substrings in keys (case-insensitive)
 _SENSITIVE_SUBSTRINGS = ("api_key", "apikey", "raw" + "_model", "secret")
+_MAX_PAYLOAD_DEPTH = 8
+_MAX_PAYLOAD_ITEMS = 1024
+_MAX_PAYLOAD_STRING_BYTES = 100_000
+_MAX_ENVELOPE_BYTES = 1_000_000
+
+
+def _sensitive_key(key: str) -> bool:
+    lower = key.lower()
+    return key in _SENSITIVE_KEYS or any(sub in lower for sub in _SENSITIVE_SUBSTRINGS) or "rawmodel" in lower
+
+
+def _sanitize_payload(value: object, depth: int = 0) -> object:
+    if depth > _MAX_PAYLOAD_DEPTH:
+        return "[TRUNCATED_NESTED_PAYLOAD]"
+    if isinstance(value, Mapping):
+        result: dict[str, object] = {}
+        for index, (key, child) in enumerate(value.items()):
+            if index >= _MAX_PAYLOAD_ITEMS or not isinstance(key, str) or _sensitive_key(key):
+                continue
+            result[key] = _sanitize_payload(child, depth + 1)
+        return result
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_payload(item, depth + 1) for item in value[:_MAX_PAYLOAD_ITEMS]]
+    if isinstance(value, str):
+        value = _CONTROL_RE.sub(" ", value)
+        encoded = value.encode("utf-8")
+        if len(encoded) > _MAX_PAYLOAD_STRING_BYTES:
+            value = encoded[:_MAX_PAYLOAD_STRING_BYTES].decode("utf-8", errors="ignore")
+        return value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:_MAX_PAYLOAD_STRING_BYTES]
 
 
 @dataclass(frozen=True)
@@ -200,27 +232,12 @@ class ArtifactEnvelope:
         for key, value in self.payload.items():
             if not isinstance(key, str):
                 continue
-            lower = key.lower()
-            if key in _SENSITIVE_KEYS or any(sub in lower for sub in _SENSITIVE_SUBSTRINGS):
+            if _sensitive_key(key):
                 continue
-            # Skip raw model envelopes
-            if ("raw" + "_model") in lower or "rawmodel" in lower:
-                continue
-            # Never include API keys values that look like secrets? We filter keys already.
-            # For values, if key is sensitive we already skipped. For other keys,
-            # we ensure we don't stringify raw bytes that contain secrets? Payload is already sanitized upstream.
-            # We still defensively redact any string value that contains api key pattern?
-            # But we must not silently drop payload; just ensure envelope json doesn't contain api key substring
-            # Tests ensure provider credentials and raw model envelopes are absent.
-            # So filtering keys is sufficient.
-            # Also reject control chars in string payload values? We bound them.
-            if isinstance(value, str) and _CONTROL_RE.search(value):
-                # Replace control chars with space to keep deterministic
-                value = _CONTROL_RE.sub(" ", value)
-                # Bound length
-                if len(value.encode("utf-8")) > 100_000:
-                    value = value.encode("utf-8")[:100_000].decode("utf-8", errors="ignore")
-            base[key] = value
+            base[key] = _sanitize_payload(value)
+        encoded = json.dumps(base, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        if len(encoded) > _MAX_ENVELOPE_BYTES:
+            raise ValueError(f"artifact envelope exceeds {_MAX_ENVELOPE_BYTES} bytes")
         return base
 
     def to_json(self, *, sort_keys: bool = True) -> str:

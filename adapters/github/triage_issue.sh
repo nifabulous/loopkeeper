@@ -30,6 +30,12 @@ GH_REPO="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
 : "${LOOPKEEPER_JOB_TIMEOUT_SECONDS:=1200}"
 : "${LOOPKEEPER_JOB_DEADLINE_EPOCH:=$(( $(date +%s) + LOOPKEEPER_JOB_TIMEOUT_SECONDS ))}"
 LOOPKEEPER_BOT_LOGIN="${LOOPKEEPER_BOT_LOGIN:-github-actions[bot]}"
+: "${LOOPKEEPER_POLICY_PATH:=.github/codex/review-policy.md}"
+
+if [[ ! "$LOOPKEEPER_POLICY_PATH" =~ ^[A-Za-z0-9._/-]+$ || "$LOOPKEEPER_POLICY_PATH" == /* || "$LOOPKEEPER_POLICY_PATH" == *..* || "$LOOPKEEPER_POLICY_PATH" == *:* ]]; then
+  echo "LOOPKEEPER_POLICY_PATH must be a safe relative path." >&2
+  exit 2
+fi
 
 require_operator() {
   if [[ "${LOOPKEEPER_OPERATOR:-}" != "1" ]]; then
@@ -146,7 +152,7 @@ show_trusted() {
 {
   cat "$TEMP_DIR/prompt.txt"
   printf '\n\n## Trusted triage policy\n'
-  show_trusted ".github/codex/review-policy.md" 2>/dev/null || show_trusted "examples/relay/review-policy.md" 2>/dev/null || echo "No triage policy."
+  show_trusted "$LOOPKEEPER_POLICY_PATH" 2>/dev/null || show_trusted "examples/relay/review-policy.md" 2>/dev/null || echo "No triage policy."
 } >"$TEMP_DIR/triage-instructions.md"
 
 {
@@ -192,12 +198,16 @@ mv "$TEMP_DIR/triage-truncated.md" "$TEMP_DIR/triage.md"
   cat "$TEMP_DIR/triage.md"
 } >"$TEMP_DIR/comment.md"
 
-if [[ "${LOOPKEEPER_OPERATOR:-}" != "1" ]]; then
+save_triage_artifacts() {
   if [[ -n "${LOOPKEEPER_ARTIFACT_DIR:-}" ]]; then
     mkdir -p "$LOOPKEEPER_ARTIFACT_DIR"
     cp "$TEMP_DIR/triage.md" "$LOOPKEEPER_ARTIFACT_DIR/triage.md"
     cp "$TEMP_DIR/comment.md" "$LOOPKEEPER_ARTIFACT_DIR/comment.md"
   fi
+}
+save_triage_artifacts
+
+if [[ "${LOOPKEEPER_OPERATOR:-}" != "1" ]]; then
   echo "Loopkeeper triage completed in read-only mode; no issue write requested."
   exit 0
 fi
@@ -229,3 +239,4 @@ if jq -e -n --arg bot "$LOOPKEEPER_BOT_LOGIN" --arg marker "$MARKER" \
   exit 0
 fi
 post_issue_comment
+save_triage_artifacts

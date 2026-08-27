@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from .policy import Policy
 from .redaction import RedactionResult
 from .truncate import truncate_utf8
-from .untrusted import wrap_untrusted
+from .untrusted import wrap_untrusted_bounded
 
 MAX_INPUT_BYTES = 120_000
 MAX_SECTION_BYTES = 50_000
@@ -80,7 +80,7 @@ def render_review_prompt(
 
     # Build input_text from untrusted artifacts, each bounded and wrapped
     # Use untrusted blocks with defanging
-    input_parts: list[str] = []
+    artifacts_to_wrap: list[tuple[str, str]] = []
     for label, content in [
         ("metadata", artifacts.metadata),
         ("diff", artifacts.diff),
@@ -91,12 +91,28 @@ def render_review_prompt(
             continue
         if not isinstance(content, str):
             raise TypeError(f"artifact {label} must be str or None")
-        bounded = _bound(content, MAX_ARTIFACT_BYTES)
-        wrapped = wrap_untrusted(label, bounded)
-        input_parts.append(wrapped)
+        artifacts_to_wrap.append((label, _bound(content, MAX_ARTIFACT_BYTES)))
 
-    input_text = "\n".join(input_parts)
-    if len(input_text.encode("utf-8")) > MAX_INPUT_BYTES:
-        input_text = truncate_utf8(input_text, MAX_INPUT_BYTES)
+    if artifacts_to_wrap:
+        # Reserve enough space for every opening/closing fence and distribute
+        # the remaining input budget across sections. No outer truncation is
+        # allowed because it could remove a closing trust delimiter.
+        separator_bytes = len("\n".encode("utf-8")) * max(0, len(artifacts_to_wrap) - 1)
+        fixed = separator_bytes + sum(
+            len(wrap_untrusted_bounded(label, "", MAX_INPUT_BYTES).encode("utf-8"))
+            for label, _ in artifacts_to_wrap
+        )
+        if fixed > MAX_INPUT_BYTES:
+            raise ValueError("input budget is too small for untrusted delimiters")
+        content_budget = MAX_INPUT_BYTES - fixed
+        base_share, remainder = divmod(content_budget, len(artifacts_to_wrap))
+        input_parts: list[str] = []
+        for index, (label, content) in enumerate(artifacts_to_wrap):
+            block_budget = len(wrap_untrusted_bounded(label, "", MAX_INPUT_BYTES).encode("utf-8"))
+            block_budget += base_share + (1 if index < remainder else 0)
+            input_parts.append(wrap_untrusted_bounded(label, content, block_budget))
+        input_text = "\n".join(input_parts)
+    else:
+        input_text = ""
 
     return Prompt(instructions=instructions, input_text=input_text)

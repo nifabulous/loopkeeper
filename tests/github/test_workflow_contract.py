@@ -66,6 +66,16 @@ def test_caller_pins_remote_workflow_and_keeps_triggers_on_default_branch():
     assert re.search(r"uses: example-org/loopkeeper/.github/workflows/pr-review.yml@[0-9a-f]{40}", raw)
 
 
+def test_example_callers_do_not_advertise_targetless_schedules():
+    for path in (
+        ROOT / "examples/github/pr-review-caller.yml",
+        ROOT / "examples/github/pr-review-posting-caller.yml",
+        ROOT / "examples/github/issue-triage-caller.yml",
+        ROOT / "examples/github/issue-triage-posting-caller.yml",
+    ):
+        assert "schedule:" not in path.read_text(encoding="utf-8")
+
+
 def test_caller_uses_pin_and_loopkeeper_sha_input_are_identical():
     for path in (ROOT / "examples/github").glob("*.yml"):
         raw = path.read_text(encoding="utf-8")
@@ -90,6 +100,35 @@ def test_called_workflow_writer_concurrency_is_non_cancelable():
     raw = (ROOT / ".github/workflows/pr-review.yml").read_text(encoding="utf-8")
     assert "cancel-in-progress: false" in raw
     assert re.search(r"concurrency:\s*\n\s+group:.*pr", raw)
+
+
+def test_reusable_workflows_persist_read_only_artifacts():
+    pr = (ROOT / ".github/workflows/pr-review.yml").read_text(encoding="utf-8")
+    triage = (ROOT / ".github/workflows/issue-triage.yml").read_text(encoding="utf-8")
+    assert "actions/upload-artifact@" in pr
+    assert "actions/download-artifact@" in pr
+    assert "actions/upload-artifact@" in triage
+    assert "LOOPKEEPER_ARTIFACT_DIR" in triage
+    assert "LOOPKEEPER_REVIEW_ARTIFACT" in pr
+    assert "LOOPKEEPER_POLICY_PATH:" in pr
+    assert "LOOPKEEPER_CONTEXT_PATH:" in pr
+    assert "LOOPKEEPER_CONTRACT_PATH:" in pr
+    assert "LOOPKEEPER_POLICY_PATH:" in triage
+
+
+def test_agent_workflow_invokes_agent_cli_and_uploads_artifacts():
+    raw = (ROOT / ".github/workflows/agent.yml").read_text(encoding="utf-8")
+    assert "loopkeeper agent" in raw
+    assert "--manifest" in raw
+    assert "--agent-name" in raw
+    assert "--task-text" in raw
+    assert "actions/upload-artifact@" in raw
+
+
+def test_ci_workflow_runs_actionlint_instead_of_echoing_a_claim():
+    raw = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "actionlint" in raw
+    assert "echo \"actionlint is supplied" not in raw
 
 
 class FakeWorkflowApi:

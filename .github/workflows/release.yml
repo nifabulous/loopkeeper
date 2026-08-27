@@ -21,17 +21,54 @@ jobs:
         with:
           python-version: "3.12"
       - name: Build and record provenance
+        env:
+          PYTHONPATH: src
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip build
+          python -m pip install --upgrade pip build twine
           python -m build --sdist --wheel
-          sha256sum dist/* > dist/SHA256SUMS
+          sha256sum dist/*.whl dist/*.tar.gz > dist/SHA256SUMS
           git rev-parse HEAD > dist/COMMIT_SHA
-          test -f release/release-manifest.json
+          python - <<'PY'
+          import hashlib, json, subprocess
+          from pathlib import Path
+          from loopkeeper import __version__
+
+          wheels = sorted(Path("dist").glob("*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit("release must contain exactly one wheel")
+          digest = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
+          commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          manifest = {
+              "schema": 1,
+              "version": __version__,
+              "commit_sha": commit,
+              "package_sha256": digest,
+              "workflow_paths": [
+                  ".github/workflows/pr-review.yml",
+                  ".github/workflows/issue-triage.yml",
+                  ".github/workflows/agent.yml",
+              ],
+              "provenance": {"source": "Loopkeeper release pipeline", "builder": "GitHub Actions"},
+          }
+          Path("dist/release-manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          PY
           tests/github/test_automation.sh
+      - name: Upload package and provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loopkeeper-release-${{ github.run_id }}
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/COMMIT_SHA
+            dist/release-manifest.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Publish package (human-approved phase 1)
         if: ${{ inputs.publish }}
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: echo "Publication requires the protected environment approval and is intentionally explicit."
+        run: python -m twine upload dist/*.whl dist/*.tar.gz

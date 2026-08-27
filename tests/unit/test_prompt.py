@@ -36,6 +36,20 @@ def test_prompt_bounds_input_sections(policy):
     assert len(prompt.input_text.encode("utf-8")) <= 200000  # generous bound
 
 
+def test_prompt_truncation_preserves_untrusted_block_delimiters(policy):
+    artifacts = UntrustedArtifacts(
+        metadata="m" * 100_000,
+        diff="d" * 100_000,
+        previous_review=None,
+        checks=None,
+    )
+    prompt = render_review_prompt(policy, RedactionResult("safe", ()), artifacts)
+    assert "<<<UNTRUSTED_DATA metadata>>>" in prompt.input_text
+    assert "<<<END_UNTRUSTED_DATA metadata>>>" in prompt.input_text
+    assert "<<<UNTRUSTED_DATA diff>>>" in prompt.input_text
+    assert "<<<END_UNTRUSTED_DATA diff>>>" in prompt.input_text
+
+
 def test_load_policy_rejects_path_outside_trusted_root(tmp_path):
     from loopkeeper.types import TrustedReader  # noqa
 

@@ -281,6 +281,43 @@ def test_verifying_executor_is_refused_without_dispatcher_attestation(tmp_path):
         run_agent(AgentRequest(manifest=manifest, agent_name="verifying-executor", task_text="task", trusted_reader=reader), config)
 
 
+def test_forge_verified_agent_manifest_is_rejected_by_generic_runner(tmp_path):
+    manifest = _agent_manifest(tmp_path, mode="github-forge-verified", with_verification=False)
+    reader = FakeReader(
+        "---\nname: domain-researcher\ndescription: test\n---\nTrusted\n",
+        trusted_root=tmp_path / "trusted",
+    )
+    transport = TransportConfig(api_style="responses", base_url=None, api_key="test-key", request_timeout=900, job_deadline_epoch=None)
+    config = AgentConfig(model="test-model", transport=transport, max_input_bytes=80000, max_output_tokens=8000, max_output_bytes=32000)
+    with pytest.raises(TrustError, match="GitHub adapter"):
+        run_agent(
+            AgentRequest(manifest=manifest, agent_name="domain-researcher", task_text="task", trusted_reader=reader),
+            config,
+        )
+
+
+def test_agent_passes_configured_reasoning_effort_to_transport(tmp_path, monkeypatch):
+    manifest = _agent_manifest(tmp_path, mode="caller-attested", with_verification=True)
+    definition_text = "---\nname: domain-researcher\ndescription: test\n---\nTrusted\n"
+    reader = FakeReader(definition_text, trusted_root=tmp_path / "trusted")
+    (tmp_path / "trusted" / "agents").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "trusted" / "agents" / "domain-researcher.md").write_text(definition_text, encoding="utf-8")
+    captured: dict[str, str] = {}
+
+    def fake_request(request, config, opener=None):
+        captured["reasoning_effort"] = request.reasoning_effort
+        return ModelResponse(text="result", raw_bytes=b"result", truncated=False, request_id=None)
+
+    monkeypatch.setattr("loopkeeper.agent.request_model", fake_request)
+    transport = TransportConfig(api_style="responses", base_url=None, api_key="test-key", request_timeout=900, job_deadline_epoch=None)
+    config = AgentConfig(
+        model="test-model", transport=transport, max_input_bytes=80000,
+        max_output_tokens=8000, max_output_bytes=32000, reasoning_effort="high",
+    )
+    run_agent(AgentRequest(manifest=manifest, agent_name="domain-researcher", task_text="task", trusted_reader=reader), config)
+    assert captured["reasoning_effort"] == "high"
+
+
 def test_agent_manifest_without_caller_attestation_fails_before_definition_read(tmp_path):
     # Manifest without verification
     manifest = _agent_manifest(tmp_path, mode="caller-attested", with_verification=False)
@@ -396,4 +433,3 @@ def test_task_text_is_sanitized_and_fenced(fake_transport, tmp_path):
     # The user input should contain defanged delimiter, not raw
     assert "[DEFANGED_DELIMITER]" in fake_transport.input_text or "UNTRUSTED_DATA" not in fake_transport.input_text or "injection" in fake_transport.input_text
     assert malicious_task.split("<<<")[0].strip() in fake_transport.input_text
-

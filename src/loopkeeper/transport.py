@@ -76,6 +76,22 @@ def remaining_seconds(job_deadline_epoch: int | None) -> float:
     return remaining
 
 
+def read_file_bounded(path: Path, max_bytes: int, label: str) -> bytes:
+    """Read at most ``max_bytes + 1`` bytes so oversized inputs fail early."""
+    if not isinstance(path, Path) or not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
+        raise ConfigError("bounded file read requires a Path and positive byte limit")
+    if not isinstance(label, str) or not label:
+        raise ConfigError("bounded file read requires a label")
+    try:
+        with path.open("rb") as stream:
+            data = stream.read(max_bytes + 1)
+    except OSError as exc:
+        raise TransportError(f"could not read {label}: {exc}") from exc
+    if len(data) > max_bytes:
+        raise TransportError(f"{label} exceeds {max_bytes} bytes")
+    return data
+
+
 def resolve_api_url(api_style: str, override: str | None) -> str:
     if api_style not in API_STYLES:
         raise ConfigError(f"API style must be one of {sorted(API_STYLES)}, got {api_style!r}")
@@ -400,8 +416,8 @@ def _transport_cli(argv: list[str] | None = None) -> int:
 
     if args.max_input_bytes <= 0 or args.max_output_tokens <= 0 or args.max_output_bytes <= 0:
         raise ConfigError("transport limits must be positive")
-    instruction_bytes = args.instructions.read_bytes()
-    input_bytes = args.input.read_bytes()
+    instruction_bytes = read_file_bounded(args.instructions, args.max_input_bytes, "instructions")
+    input_bytes = read_file_bounded(args.input, args.max_input_bytes, "input")
     combined = len(instruction_bytes) + len(input_bytes)
     if combined > args.max_input_bytes:
         raise TransportError(
