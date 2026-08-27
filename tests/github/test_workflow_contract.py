@@ -129,6 +129,11 @@ def test_ci_workflow_runs_actionlint_instead_of_echoing_a_claim():
     raw = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "actionlint" in raw
     assert "echo \"actionlint is supplied" not in raw
+    assert "ACTIONLINT_VERSION" in raw
+    assert "ACTIONLINT_SHA256" in raw
+    assert "github.com/rhysd/actionlint/releases/download" in raw
+    assert "sha256sum --check --strict" in raw
+    assert "GITHUB_PATH" in raw
 
 
 class FakeWorkflowApi:
