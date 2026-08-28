@@ -47,8 +47,10 @@ def test_pr_review_uses_bounded_pull_request_files_api_for_large_prs():
 def test_reusable_pr_workflow_scopes_write_permission_to_writer_job():
     raw = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")
     top_level = raw.split("jobs:", 1)[0]
+    review = raw.split("\n  review:", 1)[1].split("\n  writer:", 1)[0]
     writer = raw.split("\n  writer:", 1)[1]
-    assert re.search(r"^\s+pull-requests: write$", top_level, re.MULTILINE)
+    assert re.search(r"^\s+pull-requests: read$", top_level, re.MULTILINE)
+    assert not re.search(r"^\s+pull-requests: write$", review, re.MULTILINE)
     assert re.search(r"^\s+permissions:\n(?:\s+\S+: \S+\n)*\s+pull-requests: write$", writer, re.MULTILINE)
 
 
@@ -128,6 +130,40 @@ def test_posting_and_read_only_callers_have_distinct_permissions():
     issue_posting = (ROOT / "examples/github/issue-triage-posting-caller.yml").read_text(encoding="utf-8")
     assert "issues: write" not in issue_readonly
     assert "issues: write" in issue_posting
+
+
+def test_posting_review_publishes_bounded_run_summary():
+    raw = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")
+    assert "render_summary.sh" in raw
+    summary = (ROOT / "adapters/github/render_summary.sh").read_text(encoding="utf-8")
+    for field in ("evidence", "coverage", "artifact", "head SHA", "writer"):
+        assert field in summary
+
+
+def test_review_workflows_use_the_shared_summary_renderer():
+    for name in ("pr-review.yml", "pr-review-posting.yml"):
+        raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+        assert "render_summary.sh" in raw
+
+    helper = (ROOT / "adapters/github/render_summary.sh").read_text(encoding="utf-8")
+    assert "review-metadata.json" in helper
+    assert "write-metadata.json" in helper
+    assert "GITHUB_STEP_SUMMARY" in helper
+
+
+def test_review_artifact_records_evidence_and_diff_coverage_metadata():
+    raw = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+    for field in (
+        "review-metadata.json",
+        "files_returned",
+        "files_with_truncated_patch",
+        "files_page_truncated",
+        "coverage",
+    ):
+        assert field in raw
+    assert "patch_truncated=true" in raw
+    assert "Evidence coverage" in raw
+    assert "partial diff evidence" in raw
 
 
 def test_called_workflow_writer_concurrency_is_non_cancelable():

@@ -32,10 +32,13 @@ and passes PR content only through the untrusted channel.
   no unbounded `--paginate` is used. Pull-request file pages use a smaller
   configurable page size and each patch is byte-capped before the aggregate
   input bound is applied, preserving file coverage for large asset/data PRs.
-  When the configured file-page cap is reached, the diff carries
-  `files_truncated: true` so the model must disclose incomplete evidence rather
-  than claiming an exhaustive review. Malformed or truncated comment evidence
-  disables suppression and takes the fail-closed fallback path.
+  Each review artifact includes `review-metadata.json` with the evidence state
+  and a complete/partial coverage classification, including file counts and
+  per-file patch truncation. When the configured file-page cap is reached, the
+  diff carries `files_truncated: true` so the model must disclose incomplete
+  evidence rather than claiming an exhaustive review. Malformed or truncated
+  comment evidence disables suppression and takes the fail-closed fallback
+  path.
 - `GH_REPO` is validated as `owner/name` before interpolation, and every API
   path and `git show` argument is quoted. Metacharacter/branch/path inputs are
   tested against the stub harness.
@@ -68,10 +71,14 @@ and passes PR content only through the untrusted channel.
 - `LOOPKEEPER_GAP_LABEL` must resolve to an existing label before
   `--gap-issues`; otherwise emit `GAP_LABEL_UNAVAILABLE` and perform no write.
 
-## Permissions
+## Run summaries and permissions
 
-- Workflows require `contents: read`, `actions: read`, `checks: read`,
-  `issues: write`, `pull-requests: write` and no more.
+- Review and resolve jobs use read permissions. The posting PR writer is the
+  only PR-review job with `pull-requests: write`; issue-triage posting remains
+  available only through its explicit posting caller. Every review and writer
+  job writes a bounded `GITHUB_STEP_SUMMARY` showing the event, exact head,
+  evidence, coverage, artifact state, and comment action without model text or
+  credentials.
 - No artifact or cache downloads of PR code are performed; all PR content is
   read via the GitHub API and passed through the untrusted channel.
 

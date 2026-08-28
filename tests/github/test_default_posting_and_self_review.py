@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+CURRENT_RELEASE_SHA = "f1e92ab216382a3a000d95d33da6362008b706c0"
 
 
 def test_posting_pr_workflow_defaults_to_comments():
@@ -27,6 +28,7 @@ def test_loopkeeper_reviews_its_own_pull_requests_with_pinned_posting_caller():
     input_sha = re.search(r"loopkeeper_sha: ([0-9a-f]{40})", raw)
     assert use_sha and input_sha
     assert use_sha.group(1) == input_sha.group(1)
+    assert use_sha.group(1) == CURRENT_RELEASE_SHA
     assert "consumer_repo: ${{ github.repository }}" in raw
     assert "loopkeeper_repo: nifabulous/loopkeeper" in raw
     assert "ci_workflow_name: Loopkeeper CI" in raw

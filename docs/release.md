@@ -27,3 +27,9 @@ and proves coverage, exact-head filtering, privacy, and zero write attempts;
 Stage B runs only against a human-approved disposable repository and proves
 fallback creation, exact-head CI replacement, duplicate reconciliation, arbiter
 disposition, and idempotent replay. See `docs/dogfood-runbook.md`.
+
+Review and writer jobs must also publish bounded step summaries. The summary
+must identify the event, exact head, evidence state, coverage state, artifact
+availability, and comment action without including model output or credentials.
+The posting reusable workflow must grant `pull-requests: write` only to its
+writer job; read/resolve jobs remain read-only.
