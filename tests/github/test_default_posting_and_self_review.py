@@ -40,3 +40,11 @@ def test_consumer_guide_explains_posting_default_and_opt_out():
 
     assert "posts the complete review comment by default" in guide
     assert "Set `post_comments: false`" in guide
+
+
+def test_posting_writer_skips_runs_without_a_review_artifact():
+    raw = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")
+
+    assert "artifact_available: ${{ steps.artifact_status.outputs.available }}" in raw
+    assert "id: artifact_status" in raw
+    assert "needs.review.outputs.artifact_available == 'true'" in raw
