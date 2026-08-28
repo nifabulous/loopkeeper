@@ -85,6 +85,34 @@ def test_transport_retries_only_before_a_response_is_established(recording_opene
     assert recording_opener.call_count == 2
 
 
+def test_transport_passes_timeout_as_keyword_to_stdlib_urlopen():
+    request = ModelRequest("trusted policy", "untrusted diff", "example-model", "none", 100, 400)
+    config = TransportConfig(
+        api_style="responses",
+        base_url="https://api.example.com/v1/responses",
+        api_key="test-key",
+        request_timeout=10,
+        job_deadline_epoch=9999999999,
+    )
+
+    def stdlib_like_opener(req, data=None, timeout=None):
+        assert data is None
+        assert timeout == 10
+        body = json.dumps({"output_text": "bounded result"}).encode()
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return Response(body)
+
+    response = request_model(request, config, opener=stdlib_like_opener)
+    assert response.text == "bounded result"
+
+
 def test_transport_never_retries_after_a_response_or_after_deadline(recording_opener):
     request = ModelRequest("trusted policy", "untrusted diff", "example-model", "none", 100, 400)
     config = TransportConfig(

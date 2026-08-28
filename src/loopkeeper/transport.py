@@ -269,7 +269,7 @@ def _open_once(
     )
     # Phase 1: establish connection (opener)
     try:
-        response_cm = opener(req, timeout)  # type: ignore[call-arg]
+        response_cm = opener(req, timeout=timeout)  # type: ignore[call-arg]
     except urllib.error.HTTPError as error:
         raise TransportError(f"Model API request failed with HTTP {error.code}") from None
     except TimeoutError:
