@@ -58,6 +58,12 @@ def test_readonly_pr_workflow_cannot_publish_comments():
     assert re.search(r"^\s+pull-requests: read$", top_level, re.MULTILINE)
     assert "pull-requests: write" not in raw
     assert "if: ${{ inputs.post_comments && github.run_id == 0 }}" in raw
+    assert "if-no-files-found: ignore" in raw
+
+
+def test_deferred_pr_review_does_not_fail_on_missing_artifact():
+    raw = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")
+    assert "if-no-files-found: ignore" in raw
 
 
 def test_all_action_and_reusable_workflow_refs_are_full_sha_pinned():
