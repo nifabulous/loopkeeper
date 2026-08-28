@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SHELL_ADAPTERS=(
   "$ROOT/adapters/github/common.sh"
   "$ROOT/adapters/github/review_pr.sh"
+  "$ROOT/adapters/github/render_summary.sh"
   "$ROOT/adapters/github/triage_issue.sh"
 )
 
