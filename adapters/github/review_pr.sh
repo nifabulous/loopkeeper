@@ -80,6 +80,9 @@ LOOPKEEPER_BOT_LOGIN="${LOOPKEEPER_BOT_LOGIN:-github-actions[bot]}"
 : "${LOOPKEEPER_CHECK_MAX_BYTES:=20000}"
 : "${LOOPKEEPER_CHECK_MAX_PAGES:=10}"
 : "${LOOPKEEPER_CHECK_MAX_RAW_BYTES:=200000}"
+: "${LOOPKEEPER_PR_FILE_PAGE_SIZE:=5}"
+: "${LOOPKEEPER_PR_FILE_MAX_PAGES:=100}"
+: "${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES:=1000}"
 : "${LOOPKEEPER_CONTEXT_MAX_FILES:=10}"
 : "${LOOPKEEPER_CONTEXT_MAX_BYTES:=50000}"
 : "${LOOPKEEPER_MAX_OUTPUT_BYTES:=50000}"
@@ -112,12 +115,23 @@ for bound in \
   LOOPKEEPER_CI_DISCOVERY_SECONDS LOOPKEEPER_CI_DISCOVERY_POLL_SECONDS \
   LOOPKEEPER_CHECK_MAX_ITEMS LOOPKEEPER_CHECK_MAX_BYTES LOOPKEEPER_CHECK_MAX_PAGES \
   LOOPKEEPER_CHECK_MAX_RAW_BYTES \
+  LOOPKEEPER_PR_FILE_PAGE_SIZE LOOPKEEPER_PR_FILE_MAX_PAGES \
+  LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES \
   LOOPKEEPER_CONTEXT_MAX_FILES LOOPKEEPER_CONTEXT_MAX_BYTES; do
   if [[ ! "${!bound}" =~ ^[1-9][0-9]*$ ]]; then
     echo "$bound must be a positive integer." >&2
     exit 2
   fi
 done
+
+if (( LOOPKEEPER_PR_FILE_PAGE_SIZE > 100 )); then
+  echo "LOOPKEEPER_PR_FILE_PAGE_SIZE must not exceed GitHub's 100-item page limit." >&2
+  exit 2
+fi
+if (( LOOPKEEPER_PR_FILE_MAX_PAGES > 100 )); then
+  echo "LOOPKEEPER_PR_FILE_MAX_PAGES must not exceed 100." >&2
+  exit 2
+fi
 
 if [[ ! "$LOOPKEEPER_CI_WORKFLOW_FILE" =~ ^[A-Za-z0-9._/-]+$ || "$LOOPKEEPER_CI_WORKFLOW_FILE" == /* || "$LOOPKEEPER_CI_WORKFLOW_FILE" == *..* ]]; then
   echo "LOOPKEEPER_CI_WORKFLOW_FILE must be a safe relative workflow path." >&2
@@ -426,11 +440,12 @@ fi
 collect_bounded_pr_files() {
   local out_file="$1"
   local page=1
-  local page_size=100
+  local page_size="$LOOPKEEPER_PR_FILE_PAGE_SIZE"
+  local max_pages="$LOOPKEEPER_PR_FILE_MAX_PAGES"
   local page_file
   local count
   : >"$out_file"
-  while (( page <= LOOPKEEPER_CHECK_MAX_PAGES )); do
+  while (( page <= max_pages )); do
     page_file="$TEMP_DIR/pr-files-page-${page}.json"
     if ! gh api \
       "repos/${GH_REPO}/pulls/${PR_NUMBER}/files?per_page=${page_size}&page=${page}" \
@@ -445,21 +460,55 @@ collect_bounded_pr_files() {
     if (( count == 0 )); then
       break
     fi
-    jq -c '.[] | {
-      filename: .filename,
-      previous_filename: (.previous_filename // null),
-      status: (.status // ""),
-      additions: (.additions // 0),
-      deletions: (.deletions // 0),
-      changes: (.changes // 0),
-      patch: (.patch // null)
-    }' "$page_file" >>"$out_file"
+    if ! python3 - "$page_file" "$out_file" "$LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES" <<'PY'
+import json
+import sys
+
+page_file, out_file, max_patch_bytes_raw = sys.argv[1:]
+max_patch_bytes = int(max_patch_bytes_raw)
+
+def bound_patch(value):
+    if value is None:
+        return None, False
+    if not isinstance(value, str):
+        raise ValueError("patch must be a string or null")
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_patch_bytes:
+        return value, False
+    marker = f"\n[loopkeeper patch truncated at {max_patch_bytes} bytes]"
+    marker_bytes = marker.encode("utf-8")
+    if len(marker_bytes) > max_patch_bytes:
+        marker_bytes = b"[truncated]"[:max_patch_bytes]
+    prefix_budget = max(0, max_patch_bytes - len(marker_bytes))
+    prefix = encoded[:prefix_budget].decode("utf-8", "ignore")
+    marker = marker_bytes.decode("utf-8", "ignore")
+    return prefix + marker, True
+
+with open(page_file, encoding="utf-8") as source, open(out_file, "a", encoding="utf-8") as destination:
+    records = json.load(source)
+    for item in records:
+        patch, patch_truncated = bound_patch(item.get("patch"))
+        record = {
+            "filename": item["filename"],
+            "previous_filename": item.get("previous_filename"),
+            "status": item.get("status", ""),
+            "additions": item.get("additions", 0),
+            "deletions": item.get("deletions", 0),
+            "changes": item.get("changes", 0),
+            "patch": patch,
+            "patch_truncated": patch_truncated,
+        }
+        destination.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+PY
+    then
+      return 1
+    fi
     if (( count < page_size )); then
       break
     fi
     page=$((page + 1))
   done
-  (( page <= LOOPKEEPER_CHECK_MAX_PAGES )) || return 1
+  (( page <= max_pages )) || return 1
 }
 
 if ! collect_bounded_pr_files "$TEMP_DIR/pr-files.jsonl"; then

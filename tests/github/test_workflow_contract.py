@@ -36,6 +36,12 @@ def test_pr_review_uses_bounded_pull_request_files_api_for_large_prs():
     raw = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
     assert 'pulls/${PR_NUMBER}/files?per_page=' in raw
     assert "gh pr diff" not in raw
+    assert "LOOPKEEPER_PR_FILE_PAGE_SIZE" in raw
+    assert "LOOPKEEPER_PR_FILE_MAX_PAGES" in raw
+    assert "LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES" in raw
+    assert "patch_truncated" in raw
+    assert 'LOOPKEEPER_PR_FILE_PAGE_SIZE:=5' in raw
+    assert 'LOOPKEEPER_PR_FILE_MAX_PAGES:=100' in raw
 
 
 def test_reusable_pr_workflow_scopes_write_permission_to_writer_job():
