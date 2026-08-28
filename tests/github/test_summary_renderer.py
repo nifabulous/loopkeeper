@@ -33,6 +33,10 @@ def test_review_summary_discloses_partial_coverage_and_writer_state(tmp_path: Pa
         ),
         encoding="utf-8",
     )
+    (artifact_dir / "trailer.json").write_text(
+        json.dumps({"valid": True, "schema": 2, "error_code": None}),
+        encoding="utf-8",
+    )
     summary = tmp_path / "summary.md"
 
     _run(
@@ -53,6 +57,7 @@ def test_review_summary_discloses_partial_coverage_and_writer_state(tmp_path: Pa
     assert "Evidence | `fallback`" in rendered
     assert "Coverage | `partial`" in rendered
     assert "Writer | eligible in writer job" in rendered
+    assert "Trailer | `valid`" in rendered
 
 
 def test_writer_summary_reports_recorded_comment_action(tmp_path: Path):

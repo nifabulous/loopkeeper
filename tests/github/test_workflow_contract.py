@@ -32,6 +32,18 @@ def test_reusable_pr_workflow_has_workflow_call_and_no_direct_trigger():
         assert re.search(rf"^\s+{name}:$", raw, re.MULTILINE)
 
 
+def test_github_reviewer_prompt_requires_schema_two_json_trailer():
+    raw = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+
+    assert "REVIEW_TRAILER_CONTRACT" in raw
+    assert "review_validation_payload" in raw
+    assert "python3 -m loopkeeper.review_output" in raw
+    assert "--sanitize" in raw
+    assert "--max-input-bytes \"$LOOPKEEPER_MAX_OUTPUT_BYTES\"" in raw
+    assert "trailer_validation" in raw
+    assert "trailer.json" in raw
+
+
 def test_pr_review_uses_bounded_pull_request_files_api_for_large_prs():
     raw = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
     assert 'pulls/${PR_NUMBER}/files?per_page=' in raw

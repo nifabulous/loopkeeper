@@ -70,6 +70,9 @@ assert settings.max_input_bytes == 10
 `src/loopkeeper/policy.py` loads the review policy from the trusted path (`TrustedReader` bound to the verified root) and is the single source for categories, severity guidance, lifecycle rules, data handling, and display name. It rejects a path outside the trusted root, bounds each Markdown section, rejects duplicate or unknown machine-readable category headings, and preserves deterministic section order.
 
 `src/loopkeeper/prompt.py` renders the review prompt from that policy plus the active `RedactionResult`. The builder contains no product name, no payment placeholder list, and no second category table — consumer wording lives in trusted Markdown, not in adapter heredoc.
+The shared `REVIEW_TRAILER_CONTRACT` requires one final Schema-2 JSON trailer;
+the GitHub adapter uses the same contract and records bounded validation
+metadata before publishing a comment.
 
 ```python
 prompt = render_review_prompt(policy, redaction, artifacts)

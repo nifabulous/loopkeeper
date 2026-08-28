@@ -26,7 +26,10 @@ Before Phase 2, complete the staged dogfood: Stage A runs with writes disabled
 and proves coverage, exact-head filtering, privacy, and zero write attempts;
 Stage B runs only against a human-approved disposable repository and proves
 fallback creation, exact-head CI replacement, duplicate reconciliation, arbiter
-disposition, and idempotent replay. See `docs/dogfood-runbook.md`.
+disposition, idempotent replay, and a parseable Schema-2 reviewer trailer. A
+latest-round `MALFORMED-TRAILER` result is a release blocker for the normal
+review path, although malformed fixtures must still fail closed as
+`NEEDS-HUMAN`. See `docs/dogfood-runbook.md`.
 
 Review and writer jobs must also publish bounded step summaries. The summary
 must identify the event, exact head, evidence state, coverage state, artifact

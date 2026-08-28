@@ -118,6 +118,40 @@ def test_render_comment_sanitizes_and_bounds_and_footer_outside_model():
     assert "<!-- loopkeeper-evidence:ci -->" in rendered_ci
 
 
+def test_render_comment_keeps_valid_trailer_parseable_and_final():
+    from loopkeeper.schema import parse_trailer, render_trailer
+
+    sha = _sha("a")
+    marker = serialize_pr_marker(15, sha)
+    trailer = '<!-- loopkeeper-verdict: {"schema":2,"verdict":"CLEAN","findings":[]} -->'
+
+    rendered = render_comment("Summary\n\n" + trailer, marker, "ci", max_bytes=2000)
+
+    parsed = parse_trailer(rendered)
+    assert parsed.valid is True
+    assert parsed.trailer is not None
+    canonical = render_trailer(parsed.trailer)
+    assert rendered.rstrip().endswith(canonical)
+    assert rendered.index(marker) < rendered.index(canonical)
+    assert "&lt;!-- loopkeeper-verdict" not in rendered
+
+
+def test_render_comment_defangs_legacy_control_markers():
+    sha = _sha("a")
+    marker = serialize_pr_marker(15, sha)
+    model = (
+        "Legacy state <!-- codex-pr-review-no-ci:15:" + sha + " -->\n"
+        "Legacy verdict <!-- codex-verdict: {\"schema\":2} -->"
+    )
+
+    rendered = render_comment(model, marker, "fallback", max_bytes=2000)
+
+    assert "<!-- codex-pr-review-no-ci:" not in rendered
+    assert "<!-- codex-verdict:" not in rendered
+    assert "&lt;!-- codex-pr-review-no-ci:" in rendered
+    assert "&lt;!-- codex-verdict:" in rendered
+
+
 def test_upsert_review_comment_operator_gate_and_reconciliation():
     sha = _sha("a")
     marker = serialize_pr_marker(15, sha)

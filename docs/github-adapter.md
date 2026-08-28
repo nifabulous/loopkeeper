@@ -39,6 +39,14 @@ and passes PR content only through the untrusted channel.
   evidence rather than claiming an exhaustive review. Malformed or truncated
   comment evidence disables suppression and takes the fail-closed fallback
   path.
+- Model output is sanitized and passed through the shared trailer contract
+  boundary before publication. A valid Schema-2 trailer is kept as the final
+  machine-readable line (after the adapter-owned PR/evidence markers), even
+  when the human-readable body is bounded. Invalid output is retained as an
+  explicit `MALFORMED-TRAILER` validation result; it is never rewritten as a
+  synthetic clean verdict. `trailer.json` and the nested
+  `review-metadata.json.trailer_validation` record the bounded validation
+  status for operators and dogfood gates.
 - `GH_REPO` is validated as `owner/name` before interpolation, and every API
   path and `git show` argument is quoted. Metacharacter/branch/path inputs are
   tested against the stub harness.

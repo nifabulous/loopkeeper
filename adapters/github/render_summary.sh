@@ -18,11 +18,17 @@ case "$MODE" in
     actual_head="unknown"
     evidence="unavailable"
     coverage="unavailable"
+    trailer="unknown"
     metadata_file="$ARTIFACT_DIR/review-metadata.json"
     if [[ -s "$metadata_file" ]] && jq -e . "$metadata_file" >/dev/null 2>&1; then
       actual_head="$(jq -r '.head_sha // "unknown"' "$metadata_file")"
       evidence="$(jq -r '.evidence_state // "unknown"' "$metadata_file")"
       coverage="$(jq -r '.coverage.state // "unknown"' "$metadata_file")"
+      trailer="$(jq -r 'if .trailer_validation.valid == true then "valid" elif .trailer_validation.error_code then .trailer_validation.error_code else "unknown" end' "$metadata_file")"
+    fi
+    trailer_file="$ARTIFACT_DIR/trailer.json"
+    if [[ "$trailer" == "unknown" && -s "$trailer_file" ]] && jq -e . "$trailer_file" >/dev/null 2>&1; then
+      trailer="$(jq -r 'if .valid == true then "valid" elif .error_code then .error_code else "unknown" end' "$trailer_file")"
     fi
 
     if [[ "$POST_COMMENTS" != "true" ]]; then
@@ -44,6 +50,7 @@ case "$MODE" in
       echo "| Expected head SHA | \`${EXPECTED_HEAD_SHA:-not provided}\` |"
       echo "| Evidence | \`$evidence\` |"
       echo "| Coverage | \`$coverage\` |"
+      echo "| Trailer | \`$trailer\` |"
       echo "| Review step | \`$REVIEW_OUTCOME\` |"
       echo "| Artifact | \`$ARTIFACT_AVAILABLE\` ($ARTIFACT_NAME) |"
       echo "| Writer | $writer |"
