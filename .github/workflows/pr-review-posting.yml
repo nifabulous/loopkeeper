@@ -175,7 +175,7 @@ jobs:
         with:
           name: loopkeeper-review-${{ github.run_id }}
           path: ${{ github.workspace }}/loopkeeper-artifacts
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 7
 
   writer:
