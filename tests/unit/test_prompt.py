@@ -17,6 +17,15 @@ def test_prompt_uses_policy_and_active_redactor_placeholders(policy, artifacts):
     assert isinstance(prompt, Prompt)
 
 
+def test_prompt_requires_exact_schema_two_json_trailer(policy, artifacts):
+    prompt = render_review_prompt(policy, RedactionResult("safe", ()), artifacts)
+
+    assert '<!-- loopkeeper-verdict: {"schema":2,"verdict":"CLEAN","findings":[]} -->' in prompt.instructions
+    assert "final non-whitespace line" in prompt.instructions
+    assert "plain-text `loopkeeper-verdict: approve`" in prompt.instructions
+    assert "code fence" in prompt.instructions
+
+
 def test_prompt_does_not_contain_second_category_table(policy, artifacts):
     prompt = render_review_prompt(policy, RedactionResult("safe", ()), artifacts)
     # The prompt builder must not contain a second category/severity table

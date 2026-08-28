@@ -21,7 +21,10 @@ keeping gap issues disabled. Seed a no-CI PR, verify one fallback comment, then
 deliver an exact-head CI completion and verify in-place `loopkeeper-evidence:ci`
 replacement. Seed duplicate bot comments and verify deterministic oldest
 canonicalization with bounded superseded markers. Exercise an arbiter
-disposition and replay events to prove idempotency.
+disposition and replay events to prove idempotency. The latest review artifact
+must contain a parseable Schema-2 trailer, and the arbiter must not report
+`MALFORMED-TRAILER`; malformed-output handling remains a separate fail-closed
+test that is expected to produce `NEEDS-HUMAN`.
 
 Record `dogfood_stage: "B-disposable-write"`, the throwaway repository,
 approval reference, operator state `true`, gap-issue state `false`, bounded

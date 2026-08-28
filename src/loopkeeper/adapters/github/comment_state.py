@@ -26,6 +26,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from loopkeeper.review_output import bound_review_output, split_valid_trailer
+from loopkeeper.schema import render_trailer
+
 # ---------------------------------------------------------------------------
 # Marker serialization (single source of truth)
 # ---------------------------------------------------------------------------
@@ -233,12 +236,23 @@ def _escape_marker_like_text(text: str) -> str:
     loopkeeper-pr-review, loopkeeper-evidence, or loopkeeper-superseded.
     We escape by inserting a zero-width or by replacing `<!--` with `&lt;!--`.
     """
-    # Use simple escaping: replace `<!-- loopkeeper` with `&lt;!-- loopkeeper`
-    # This preserves readability while preventing exact marker match.
-    # Also handle codex legacy markers for defense in depth.
-    escaped = text.replace("<!-- loopkeeper", "&lt;!-- loopkeeper")
-    escaped = escaped.replace("<!-- codex", "&lt;!-- codex")
-    # Also escape case variations? Marker is case-sensitive exact, so only exact string matters.
+    # Escape every known control marker in model-owned prose. Valid trailers
+    # have already been split out by render_comment, so preserving a trailer
+    # does not require leaving verdict markers unescaped here.
+    escaped = text
+    for marker in (
+        "loopkeeper-pr-review:",
+        "loopkeeper-pr-review-no-ci:",
+        "loopkeeper-evidence:",
+        "loopkeeper-superseded:",
+        "loopkeeper-verdict:",
+        "codex-" + "pr-review:",
+        "codex-" + "pr-review-no-ci:",
+        "codex-" + "evidence:",
+        "codex-" + "superseded:",
+        "codex-" + "verdict:",
+    ):
+        escaped = escaped.replace(f"<!-- {marker}", f"&lt;!-- {marker}")
     return escaped
 
 
@@ -279,23 +293,42 @@ def render_comment(
         raise ValueError("max_bytes too small for marker/footer reservation")
     budget_for_model = max_bytes - footer_bytes
 
-    # The trusted package redactor is mandatory. Falling back to raw model
-    # text would make publication correctness depend on import state.
-    from loopkeeper.redaction import sanitize
+    # The trusted package redactor is mandatory. The shared helper keeps
+    # valid trailer identity fields intact while sanitizing prose and evidence.
+    from loopkeeper.review_output import sanitize_review_output
 
-    sanitized = sanitize(model_markdown)
+    sanitized = sanitize_review_output(model_markdown)
 
-    # Escape marker-like text after sanitization so model cannot forge marker
-    sanitized = _escape_marker_like_text(sanitized)
+    # Bound the model response without losing a valid machine-readable trailer.
+    # Invalid output remains invalid and is retained for fail-closed accounting.
+    bounded = bound_review_output(sanitized, budget_for_model)
+    split = split_valid_trailer(bounded)
+    if split is None:
+        # Escape adapter state markers in untrusted prose, then append the
+        # adapter-owned footer. A malformed trailer is intentionally not
+        # synthesized into a clean result.
+        sanitized = _escape_marker_like_text(bounded)
+        from loopkeeper.truncate import truncate_utf8
 
-    # Truncate UTF-8 safely within budget, including marker reservation
-    from loopkeeper.truncate import truncate_utf8
+        truncated = truncate_utf8(sanitized, budget_for_model)
+        return truncated.rstrip() + footer
 
-    truncated = truncate_utf8(sanitized, budget_for_model)
-
-    # Ensure truncated still escapes marker-like? already escaped
-    # Append footer outside model body
-    return truncated.rstrip() + footer
+    prose, trailer_value = split
+    prose = _escape_marker_like_text(prose)
+    canonical_trailer = render_trailer(trailer_value)
+    adapter_footer = f"{marker}\n{evidence_marker}"
+    trailer_tail = f"\n\n{adapter_footer}\n\n{canonical_trailer}\n"
+    prose_budget = max_bytes - len(trailer_tail.encode("utf-8"))
+    if prose_budget < 0:
+        raise ValueError("max_bytes too small for marker/footer and review trailer")
+    if len(prose.encode("utf-8")) > prose_budget:
+        truncation_note = f"\n\n[Review body truncated at {max_bytes} bytes.]\n"
+        note_budget = prose_budget - len(truncation_note.encode("utf-8"))
+        if note_budget >= 0:
+            prose = prose.encode("utf-8")[:note_budget].decode("utf-8", errors="ignore").rstrip()
+            return prose + truncation_note + trailer_tail.lstrip("\n")
+        prose = ""
+    return prose.rstrip() + trailer_tail
 
 
 # ---------------------------------------------------------------------------

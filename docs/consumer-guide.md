@@ -30,8 +30,11 @@ replacement for forge resolution.
 
 Review runs publish a bounded job summary with the event, PR head, evidence
 state, coverage state, artifact availability, and writer action. The uploaded
-review artifact also contains `review-metadata.json`; use those fields when
-diagnosing a deferred direct run or a later exact-head CI replacement.
+review artifact also contains `review-metadata.json` and `trailer.json`.
+`trailer.json` records whether the model emitted a valid Schema-2 trailer;
+`MALFORMED-TRAILER` is intentionally fail-closed and must be resolved before
+expecting an automated arbiter disposition. Use these fields when diagnosing a
+deferred direct run or a later exact-head CI replacement.
 
 Set `ci_workflow_name` and `ci_workflow_file` to the workflow's display name and
 file name (for example `CI` and `ci.yml`). Loopkeeper resolves the display name

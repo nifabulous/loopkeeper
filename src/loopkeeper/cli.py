@@ -48,18 +48,9 @@ def _print_version() -> int:
 # ---------------------------------------------------------------------------
 
 def _sanitize_model_text(text: str) -> str:
-    from .redaction import sanitize
-    import re
+    from .review_output import sanitize_review_output
 
-    # Built-in sanitizer covers credentials, tokens, cookies, cards, etc.
-    sanitized = sanitize(text)
-    # Defense-in-depth for short test secrets like "sk-live-value" that fall
-    # below the corpus length threshold (the corpus requires >=12-16 chars).
-    # This ensures the test_model_echo_is_redacted expectation holds without
-    # weakening the production redaction guarantees.
-    sanitized = re.sub(r"\b(?:sk|pk|rk|ak)[-_][A-Za-z0-9_-]{3,}\b", "[SECRET]", sanitized)
-    sanitized = sanitized.replace("sk-live-value", "[SECRET]")
-    return sanitized
+    return sanitize_review_output(text)
 
 
 # ---------------------------------------------------------------------------

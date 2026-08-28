@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from .policy import Policy
 from .redaction import RedactionResult
+from .review_output import REVIEW_TRAILER_CONTRACT
 from .truncate import truncate_utf8
 from .untrusted import wrap_untrusted_bounded
 
@@ -57,6 +58,9 @@ def render_review_prompt(
     # No hard-coded product name or placeholder list here
     parts: list[str] = []
     parts.append(f"# {policy.display_name}")
+    # Keep the machine-readable output contract near the start so a large
+    # trusted policy cannot truncate it away from the model instructions.
+    parts.append(REVIEW_TRAILER_CONTRACT.rstrip())
     # Categories – deterministic order as in policy
     parts.append("## Categories")
     for cat in policy.categories:
