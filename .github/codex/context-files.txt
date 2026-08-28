@@ -1,0 +1,5 @@
+# Trusted reference material for self-review.
+README.md
+docs/security.md
+docs/consumer-guide.md
+docs/operator-runbook.md

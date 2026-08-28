@@ -27,6 +27,7 @@ jobs:
       ci_workflow_file: ci.yml
       expected_head_sha: ${{ github.event.workflow_run.head_sha || '' }}
       job_timeout_seconds: 1200
+      # Visible PR comments are the default. Set false for an artifact-only run.
       post_comments: true
     secrets:
       model_api_key: ${{ secrets.LOOPKEEPER_API_KEY }}

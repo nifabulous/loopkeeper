@@ -29,7 +29,7 @@ on:
       post_comments:
         type: boolean
         required: false
-        default: false
+        default: true
       pr_number:
         type: number
         required: false
