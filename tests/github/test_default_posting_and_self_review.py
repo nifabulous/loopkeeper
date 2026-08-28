@@ -48,3 +48,11 @@ def test_posting_writer_skips_runs_without_a_review_artifact():
     assert "artifact_available: ${{ steps.artifact_status.outputs.available }}" in raw
     assert "id: artifact_status" in raw
     assert "needs.review.outputs.artifact_available == 'true'" in raw
+
+
+def test_large_pr_file_caps_are_reported_as_incomplete_evidence():
+    raw = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+
+    assert "PR_FILES_TRUNCATED" in raw
+    assert "files_truncated:" in raw
+    assert "reached its bounded file-page limit" in raw
