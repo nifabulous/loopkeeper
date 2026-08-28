@@ -7,12 +7,16 @@ review the resulting permissions before enabling the workflow.
 
 ## PR review
 
-Use `pr-review-caller.yml` for read-only artifacts. It calls the
-`.github/workflows/pr-review.yml` entrypoint and requests only `contents: read`,
-`actions: read`, `checks: read`, and `pull-requests: read`.
-Use `pr-review-posting-caller.yml` only when a human has approved comment
-publishing; it calls the separate `.github/workflows/pr-review-posting.yml`
-entrypoint, adds `pull-requests: write`, and sets `post_comments: true`.
+For the normal setup, use `pr-review-posting-caller.yml`. It calls the
+`.github/workflows/pr-review-posting.yml` entrypoint, requests
+`pull-requests: write`, and posts the complete review comment by default.
+Set `post_comments: false` to keep the run artifact-only, or use
+`pr-review-caller.yml` when the caller should request only
+`contents: read`, `actions: read`, `checks: read`, and `pull-requests: read`.
+
+The read-only entrypoint remains available as the least-privilege option. The
+posting entrypoint's default is deliberately scoped to that explicit posting
+caller; selecting the read-only entrypoint never grants write permission.
 
 The caller owns all triggers. The reusable workflow accepts only
 `workflow_call`, resolves the consumer default-branch SHA from GitHub, and

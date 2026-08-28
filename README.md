@@ -31,13 +31,16 @@ loopkeeper --version
 python -m pytest -q
 ```
 
-GitHub consumers should start with the read-only templates in
-`examples/github/`. Replace the fixture slug and full release SHA, then review
-the caller permissions. Posting callers are separate and require an explicit
-human-controlled `post_comments: true`; the adapter enforces
-`LOOPKEEPER_OPERATOR=1` for every write. Generic CI consumers can run
-`examples/ci/generic-review.sh` or `examples/ci/generic-triage.sh` with a
-caller-attested manifest and receive artifacts only.
+GitHub consumers should start with the posting template in
+`examples/github/pr-review-posting-caller.yml` when they want the full review
+to appear on the pull request. The posting entrypoint defaults to
+`post_comments: true`; set it to `false` to keep the run artifact-only, or use
+`pr-review-caller.yml` when the caller should request only read permissions.
+Replace the fixture slug and full release SHA, then review the caller
+permissions. The adapter still enforces `LOOPKEEPER_OPERATOR=1` for every
+write. Generic CI consumers can run `examples/ci/generic-review.sh` or
+`examples/ci/generic-triage.sh` with a caller-attested manifest and receive
+artifacts only.
 
 The trust model, release process, and staged dogfood gates are documented in
 [`docs/security.md`](docs/security.md), [`docs/release.md`](docs/release.md),

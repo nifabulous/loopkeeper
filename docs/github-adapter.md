@@ -32,8 +32,10 @@ and passes PR content only through the untrusted channel.
   no unbounded `--paginate` is used. Pull-request file pages use a smaller
   configurable page size and each patch is byte-capped before the aggregate
   input bound is applied, preserving file coverage for large asset/data PRs.
-  Malformed or truncated comment evidence disables suppression and takes the
-  fail-closed fallback path.
+  When the configured file-page cap is reached, the diff carries
+  `files_truncated: true` so the model must disclose incomplete evidence rather
+  than claiming an exhaustive review. Malformed or truncated comment evidence
+  disables suppression and takes the fail-closed fallback path.
 - `GH_REPO` is validated as `owner/name` before interpolation, and every API
   path and `git show` argument is quoted. Metacharacter/branch/path inputs are
   tested against the stub harness.
