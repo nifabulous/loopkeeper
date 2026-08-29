@@ -101,3 +101,109 @@ def test_select_workflow_run_target_pure_filter():
     assert select_workflow_run_target("workflow_run", "pull_request", sha, sha, "OPEN", 15, []) == "fallback"
     # Non-hex sha
     assert select_workflow_run_target("workflow_run", "pull_request", "not-sha", sha, "OPEN", 15, [15]) == "fallback"
+
+
+# ---------------------------------------------------------------------------
+# Name/file agreement is resolved through forge identity, never string equality
+#
+# A display name and a file name are independent: either can be renamed without
+# the other. Resolution must therefore confirm both resolve to the SAME
+# workflow ID, and refuse when it cannot establish that.
+# ---------------------------------------------------------------------------
+
+REGISTRY_NAME = "Global Registry Core"
+REGISTRY_FILE = "registry-core.yml"
+
+
+def _workflow(id_, name, path, state="active"):
+    return {"id": id_, "name": name, "path": f".github/workflows/{path}", "state": state}
+
+
+def test_display_name_and_file_resolving_to_one_workflow_is_accepted():
+    """The positive case: both inputs identify a single active workflow."""
+    api = _fake_api(
+        [
+            _workflow(11, REGISTRY_NAME, REGISTRY_FILE),
+            _workflow(12, "Docs", "docs.yml"),
+        ]
+    )
+
+    target = resolve_workflow_target("owner/repo", REGISTRY_NAME, REGISTRY_FILE, api)
+
+    assert target.workflow_id == 11
+
+
+def test_matching_name_on_a_renamed_file_is_refused():
+    """The workflow was renamed on disk; the configured file no longer matches."""
+    api = _fake_api([_workflow(11, REGISTRY_NAME, "registry-core-v2.yml")])
+
+    with pytest.raises(WorkflowLookupError):
+        resolve_workflow_target("owner/repo", REGISTRY_NAME, REGISTRY_FILE, api)
+
+
+def test_matching_file_under_a_different_display_name_is_refused():
+    """The file is right but the display name was changed in the workflow YAML."""
+    api = _fake_api([_workflow(11, "Registry Core (legacy)", REGISTRY_FILE)])
+
+    with pytest.raises(WorkflowLookupError):
+        resolve_workflow_target("owner/repo", REGISTRY_NAME, REGISTRY_FILE, api)
+
+
+def test_name_and_file_belonging_to_different_workflows_is_refused():
+    """The mismatched-ID case: each input matches, but not the same workflow.
+
+    String equality on either input alone would accept this. Only comparing
+    resolved identity rejects it.
+    """
+    api = _fake_api(
+        [
+            _workflow(11, REGISTRY_NAME, "something-else.yml"),
+            _workflow(12, "Unrelated", REGISTRY_FILE),
+        ]
+    )
+
+    with pytest.raises(WorkflowLookupError):
+        resolve_workflow_target("owner/repo", REGISTRY_NAME, REGISTRY_FILE, api)
+
+
+def test_missing_workflow_is_refused():
+    api = _fake_api([_workflow(12, "Docs", "docs.yml")])
+
+    with pytest.raises(WorkflowLookupError):
+        resolve_workflow_target("owner/repo", REGISTRY_NAME, REGISTRY_FILE, api)
+
+
+def test_duplicate_name_and_file_is_ambiguous_not_first_match():
+    """Two active workflows sharing both inputs must not silently pick one."""
+    api = _fake_api(
+        [
+            _workflow(11, REGISTRY_NAME, REGISTRY_FILE),
+            _workflow(12, REGISTRY_NAME, REGISTRY_FILE),
+        ]
+    )
+
+    with pytest.raises(WorkflowLookupError, match="ambiguous"):
+        resolve_workflow_target("owner/repo", REGISTRY_NAME, REGISTRY_FILE, api)
+
+
+def test_malformed_api_response_is_refused():
+    """A response missing its workflows array is unavailable evidence."""
+
+    class Broken:
+        def list_workflows(self, repo, page, per_page=100):
+            return {"total_count": 1}
+
+    with pytest.raises((WorkflowLookupError, KeyError, TypeError)):
+        resolve_workflow_target("owner/repo", REGISTRY_NAME, REGISTRY_FILE, Broken())
+
+
+def test_inactive_workflow_matching_both_inputs_is_refused():
+    """An omitted or non-active state is never treated as active."""
+    for state in ("disabled_manually", "disabled_inactivity", None):
+        entry = _workflow(11, REGISTRY_NAME, REGISTRY_FILE)
+        if state is None:
+            entry.pop("state")
+        else:
+            entry["state"] = state
+        with pytest.raises(WorkflowLookupError):
+            resolve_workflow_target("owner/repo", REGISTRY_NAME, REGISTRY_FILE, _fake_api([entry]))
