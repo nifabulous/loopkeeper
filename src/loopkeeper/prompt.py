@@ -1,8 +1,9 @@
 """Prompt composition for Loopkeeper.
 
-The policy file is the only review matrix; the builder must not contain
-product names, payment-domain placeholder lists, or a second
-category/severity table.  Consumer wording lives in trusted policy Markdown.
+The trusted policy file is the only review matrix. This builder must not
+contain product names, domain-specific placeholder lists, or a second
+category/severity table: all consumer wording lives in the policy Markdown,
+and every category is a consumer-defined slug the policy declared itself.
 """
 
 from __future__ import annotations
@@ -76,6 +77,13 @@ def render_review_prompt(
         placeholder_list = ", ".join(redaction.placeholders)
         handling = handling + f"\n\nActive redaction placeholders: {placeholder_list}."
     parts.append(handling)
+
+    # Consumer-owned sections follow the structural guidance, in the order the
+    # policy declared them. They are bounded like any other section but carry
+    # no category or lifecycle semantics.
+    for section in policy.extra_sections:
+        parts.append(f"## {section.heading}")
+        parts.append(_bound(section.content, MAX_SECTION_BYTES))
 
     instructions = "\n\n".join(parts)
     # Bound whole instructions

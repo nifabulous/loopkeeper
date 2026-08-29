@@ -1,12 +1,12 @@
 # Relay compatibility
 
-Loopkeeper isolates Relay compatibility to `adapters/relay/compat.py`. The package
+Loopkeeper isolates Relay compatibility to `src/loopkeeper/adapters/relay/compat.py`. The package
 and new workflows emit only Loopkeeper names (`LOOPKEEPER_*`). Legacy Relay names
 are understood only in the compat adapter.
 
 ## Environment mapping
 
-`adapters/relay/compat.py::map_relay_environment` translates a
+`src/loopkeeper/adapters/relay/compat.py::map_relay_environment` translates a
 `Mapping[str, str]` containing legacy `CODEX_*`, `ARBITER_*`, `RELAY_AGENT_*`,
 and `OPENAI_API_KEY` entries to canonical `LOOPKEEPER_*` entries:
 
@@ -33,7 +33,7 @@ Per-agent vars are normalized: `CODEX_AGENT_FOO_MODEL` → `LOOPKEEPER_AGENT_FOO
 with uppercase and hyphens-to-underscores. Existing `LOOPKEEPER_*` values are never
 overridden by legacy.
 
-Only `adapters/relay/compat.py` may import `CODEX_*` names; tests grep the
+Only `src/loopkeeper/adapters/relay/compat.py` may import `CODEX_*` names; tests grep the
 `loopkeeper/` package for stray `CODEX` imports.
 
 ## Marker parsing

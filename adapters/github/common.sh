@@ -55,6 +55,75 @@ require_operator() {
   fi
 }
 
+# Forge-backed trust-root verification. Returns zero only when the local
+# checkout is exactly the declared trusted SHA *and* that SHA is the forge's
+# current tip of the forge's own default branch. The caller-supplied branch
+# name is never authoritative; it is only checked for agreement with the forge.
+# Both forge responses are byte-bounded, and any unavailable, oversized, or
+# malformed response fails closed.
+#
+# Usage: verify_consumer_checkout <repo-root> <repo> <trusted-sha> <default-branch>
+verify_consumer_checkout() {
+  local repo_root="$1"
+  local repo="$2"
+  local trusted_sha="$3"
+  local default_branch="$4"
+  local max_bytes="${LOOPKEEPER_CHECK_MAX_RAW_BYTES:-200000}"
+
+  if [[ ! "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+    echo "GH_REPO must be owner/name." >&2
+    return 1
+  fi
+  if [[ ! "$trusted_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "trusted SHA must be a full lowercase commit SHA." >&2
+    return 1
+  fi
+  if [[ ! "$default_branch" =~ ^[A-Za-z0-9._/-]+$ || "$default_branch" == /* || "$default_branch" == *..* ]]; then
+    echo "declared default branch name is unsafe." >&2
+    return 1
+  fi
+
+  local checked_out
+  if ! checked_out="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null)"; then
+    echo "Could not resolve the checked-out commit in ${repo_root}; refusing to run." >&2
+    return 1
+  fi
+  if [[ "$checked_out" != "$trusted_sha" ]]; then
+    echo "Checkout ${checked_out} does not match the trusted SHA ${trusted_sha}; refusing to run with branch-controlled policy." >&2
+    return 1
+  fi
+
+  local actual_default
+  if ! actual_default="$(gh api "repos/${repo}" --jq '.default_branch' 2>/dev/null \
+    | capture_bounded_stream "$max_bytes" "default branch name")"; then
+    echo "Could not resolve the default branch of ${repo} through the GitHub API; refusing to run without an independently verified default branch." >&2
+    return 1
+  fi
+  if [[ -z "$actual_default" || "$actual_default" == "null" ]]; then
+    echo "Forge returned no usable default branch for ${repo}; refusing to run." >&2
+    return 1
+  fi
+  if [[ "$default_branch" != "$actual_default" ]]; then
+    echo "Declared default branch ${default_branch} is not the default branch of ${repo} (${actual_default}); refusing to read trusted policy from a non-default branch." >&2
+    return 1
+  fi
+
+  local remote_tip
+  if ! remote_tip="$(gh api "repos/${repo}/git/ref/heads/${actual_default}" --jq '.object.sha' 2>/dev/null \
+    | capture_bounded_stream "$max_bytes" "default branch tip")"; then
+    echo "Could not resolve refs/heads/${actual_default} on ${repo} through the GitHub API; refusing to run." >&2
+    return 1
+  fi
+  if [[ ! "$remote_tip" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Forge did not return a full default-branch tip SHA for ${repo}; refusing to run." >&2
+    return 1
+  fi
+  if [[ "$checked_out" != "$remote_tip" ]]; then
+    echo "Checkout ${checked_out} is not the tip of ${actual_default} on ${repo} (${remote_tip}); refusing to run with branch-controlled policy." >&2
+    return 1
+  fi
+}
+
 # Verify GH_REPO is quoted when used in API paths — static check helper
 # (used by test harness, not runtime)
 # No-op at runtime, but documents invariant

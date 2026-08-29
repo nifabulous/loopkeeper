@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from loopkeeper.artifacts import Provenance, render_artifact, write_artifacts, resource_path
+from loopkeeper.artifacts import (
+    Provenance,
+    read_resource_text,
+    render_artifact,
+    write_artifacts,
+)
 
 
 def provenance(repo: str) -> Provenance:
@@ -104,19 +109,23 @@ def test_write_artifacts_atomic_replace(tmp_path: Path):
     assert not any(p.name.startswith(".tmp.") for p in tmp_path.iterdir())
 
 
-def test_resource_path_helper(tmp_path: Path):
-    # Check that resource_path finds manifests and schemas from wheel and source
-    review = resource_path("manifests/review.json")
-    assert review.exists()
-    assert review.read_text().strip().startswith("{")
-    schema = resource_path("schemas/history.schema.json")
-    assert schema.exists()
-    triage = resource_path("manifests/triage.json")
-    assert triage.exists()
-    agent = resource_path("manifests/agent.json")
-    assert agent.exists()
-    history = resource_path("manifests/history.json")
-    assert history.exists()
+def test_resource_reader_returns_content_for_manifests_and_schemas():
+    """Resources are read as content, so zipimported packages work too."""
+    review = read_resource_text("manifests/review.json")
+    assert review.strip().startswith("{")
+    for name in (
+        "schemas/history.schema.json",
+        "manifests/triage.json",
+        "manifests/agent.json",
+        "manifests/history.json",
+    ):
+        assert read_resource_text(name).strip().startswith("{"), name
+
+
+def test_resource_reader_rejects_names_that_escape_the_resource_root():
+    for bad in ("../pyproject.toml", "/etc/passwd", "manifests/../../setup.py", "", "a/../../b"):
+        with pytest.raises(ValueError):
+            read_resource_text(bad)
 
 
 def test_every_machine_readable_file_has_envelope_fields(tmp_path: Path):
@@ -155,3 +164,18 @@ def test_output_paths_stay_under_requested_dir(tmp_path: Path):
     # Also check that absolute path not allowed
     with pytest.raises(ValueError, match="artifact name"):
         write_artifacts(tmp_path, {"/absolute.md": "x"})
+
+
+def test_short_provider_token_is_redacted_by_the_general_regex():
+    """The general token regex covers the fixture literal on its own.
+
+    review_output._sanitize_free_text carried a hardcoded
+    .replace("sk-live-value", ...) alongside the regex. Prove the regex
+    handles that shape and neighbouring ones, so removing the literal
+    changes no behavior.
+    """
+    from loopkeeper.review_output import _sanitize_free_text
+
+    for token in ("sk-live-value", "sk_live_value", "pk-test-abcdef", "rk-prod-1234"):
+        assert token not in _sanitize_free_text(f"leaked {token} here")
+        assert "[SECRET]" in _sanitize_free_text(f"leaked {token} here")

@@ -7,29 +7,19 @@ operator gating, and duplicate reconciliation.
 from __future__ import annotations
 
 import os
+
 import pytest
 
 # Support both import paths
-try:
-    from loopkeeper.adapters.github.comment_state import (
-        CommentState,
-        decide_comment_action,
-        render_comment,
-        serialize_evidence_marker,
-        serialize_pr_marker,
-        serialize_superseded_marker,
-        upsert_review_comment,
-    )
-except ImportError:
-    from adapters.github.comment_state import (
-        CommentState,
-        decide_comment_action,
-        render_comment,
-        serialize_evidence_marker,
-        serialize_pr_marker,
-        serialize_superseded_marker,
-        upsert_review_comment,
-    )
+from loopkeeper.adapters.github.comment_state import (
+    CommentState,
+    decide_comment_action,
+    render_comment,
+    serialize_evidence_marker,
+    serialize_pr_marker,
+    serialize_superseded_marker,
+    upsert_review_comment,
+)
 
 
 def _sha(c: str) -> str:

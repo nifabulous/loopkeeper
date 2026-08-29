@@ -2,20 +2,11 @@
 
 from __future__ import annotations
 
-import pytest
-
-try:
-    from loopkeeper.adapters.relay.compat import (
-        map_relay_environment,
-        parse_legacy_marker,
-        translate_legacy_marker_to_canonical,
-    )
-except ImportError:
-    from adapters.relay.compat import (
-        map_relay_environment,
-        parse_legacy_marker,
-        translate_legacy_marker_to_canonical,
-    )
+from loopkeeper.adapters.relay.compat import (
+    map_relay_environment,
+    parse_legacy_marker,
+    translate_legacy_marker_to_canonical,
+)
 
 
 def test_map_relay_environment_translates_legacy_names():

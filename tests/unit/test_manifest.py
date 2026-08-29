@@ -128,7 +128,7 @@ def signed_review_manifest(tmp_path: Path, signature: str | None = None, key_id:
     untrusted = tmp_path / "untrusted"
     trusted.mkdir(exist_ok=True)
     untrusted.mkdir(exist_ok=True)
-    (trusted / "policy.md").write_text("# Policy\n## Categories\nfunctional\n## Severity\nlow\n## Lifecycle\nopen\n## Data handling\nnone\n", encoding="utf-8")
+    (trusted / "policy.md").write_text("# Policy\n## Categories\n- functional\n## Severity\nlow\n## Lifecycle\nopen\n## Data handling\nnone\n", encoding="utf-8")
     (untrusted / "metadata.json").write_text("{}", encoding="utf-8")
     (untrusted / "diff.patch").write_text("diff", encoding="utf-8")
     return manifest_path
@@ -376,3 +376,31 @@ def test_unsigned_digest_trailing_newline_is_required():
     with_newline = unsigned_manifest_digest(val)
     assert with_newline != without_newline
 
+
+
+def test_additional_untrusted_entry_confinement_fails_closed(tmp_path, monkeypatch):
+    """An unexpected confinement error must not be swallowed.
+
+    resolve_bounded_path funnels almost everything into ManifestError today,
+    so the silent `except Exception: pass` in the additional-entry loop looks
+    harmless. It is still the wrong shape for a trust check: any error type it
+    does not anticipate silently ACCEPTS an unconfined path. The metadata/diff
+    loop above already converts correctly, so this exercises the extra-entry
+    loop in isolation.
+    """
+    import loopkeeper.manifest as manifest_module
+
+    def _explode(raw, root, max_bytes):
+        raise OSError("simulated filesystem failure")
+
+    monkeypatch.setattr(manifest_module, "resolve_bounded_path", _explode)
+
+    untrusted_root = tmp_path / "untrusted"
+    untrusted_root.mkdir()
+
+    with pytest.raises(ManifestError, match="could not be confined"):
+        manifest_module._validate_untrusted_section(
+            {"extra_evidence": "extra.txt"},
+            {"max_input_bytes": 1000},
+            untrusted_root,
+        )

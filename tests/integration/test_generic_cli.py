@@ -50,7 +50,7 @@ def test_generic_review_uses_manifest_policy_and_fails_without_model_binding(tmp
     policy_path = tmp_path / "trusted" / "policy.md"
     policy_path.write_text(
         "# Consumer Review Policy\n"
-        "## Categories\nfunctional security\n"
+        "## Categories\n- functional\n- security\n"
         "## Severity\nCUSTOM SEVERITY\n"
         "## Lifecycle\nCUSTOM LIFECYCLE\n"
         "## Data handling\nCUSTOM DATA\n",

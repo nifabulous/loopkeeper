@@ -8,18 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-try:
-    from loopkeeper.adapters.github.workflow_identity import (
-        WorkflowLookupError,
-        resolve_workflow_target,
-        select_workflow_run_target,
-    )
-except ImportError:
-    from adapters.github.workflow_identity import (
-        WorkflowLookupError,
-        resolve_workflow_target,
-        select_workflow_run_target,
-    )
+from loopkeeper.adapters.github.workflow_identity import (
+    WorkflowLookupError,
+    resolve_workflow_target,
+    select_workflow_run_target,
+)
 
 
 def _fake_api(workflows, total_count=None):

@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 
-from loopkeeper.artifacts import resource_path
+from loopkeeper.artifacts import read_resource_text
 from loopkeeper.attestation import unsigned_manifest_digest
 
 
@@ -24,7 +24,7 @@ def prepare_roots(tmp_path: Path, manifest: dict) -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(
                 "# Policy\n"
-                "## Categories\nfunctional security\n"
+                "## Categories\n- functional\n- security\n"
                 "## Severity\nP1 blocks merge.\n"
                 "## Lifecycle\nTrack findings across rounds.\n"
                 "## Data handling\nDo not store secrets.\n",
@@ -86,4 +86,4 @@ def sign_manifest(tmp_path: Path, manifest: dict, key_id: str = "integration-v1"
 
 
 def fixture_manifest(kind: str) -> dict:
-    return json.loads(resource_path(f"manifests/{kind}.json").read_text(encoding="utf-8"))
+    return json.loads(read_resource_text(f"manifests/{kind}.json"))

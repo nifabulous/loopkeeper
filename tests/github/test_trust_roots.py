@@ -16,20 +16,12 @@ from pathlib import Path
 
 import pytest
 
-try:
-    from loopkeeper.adapters.github.trust import (
-        GapLabelUnavailable,
-        resolve_consumer_trusted_sha,
-        verify_gap_label,
-        verify_loopkeeper_checkout,
-    )
-except ImportError:
-    from adapters.github.trust import (
-        GapLabelUnavailable,
-        resolve_consumer_trusted_sha,
-        verify_gap_label,
-        verify_loopkeeper_checkout,
-    )
+from loopkeeper.adapters.github.trust import (
+    GapLabelUnavailable,
+    resolve_consumer_trusted_sha,
+    verify_gap_label,
+    verify_loopkeeper_checkout,
+)
 
 
 def _sha(c: str) -> str:
