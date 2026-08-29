@@ -28,6 +28,7 @@ from typing import Literal, Protocol
 
 from loopkeeper.review_output import bound_review_output, split_valid_trailer
 from loopkeeper.schema import render_trailer
+from loopkeeper.types import Trailer
 
 # ---------------------------------------------------------------------------
 # Marker serialization (single source of truth)
