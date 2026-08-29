@@ -1,6 +1,16 @@
-# Loopkeeper dogfoods its own posting workflow. The pin intentionally points at
-# the last reviewed release so changes to this caller cannot change the code
-# that reviews the pull request containing them.
+# Loopkeeper dogfoods its own posting workflow. The pin points at the last
+# merged release so changes to this caller cannot change the code that reviews
+# the pull request containing them.
+#
+# The pin must always name an already-merged, immutable commit. It is bumped in
+# its own follow-up pull request, never in a pull request that also changes the
+# reviewer: a pull request cannot pin to its own merge commit, and pointing at
+# an unmerged head would let a change review itself.
+#
+# Bumping is not optional housekeeping. The reviewer's behaviour -- prompt
+# construction, evidence budgets, trust guards -- comes entirely from the
+# checkout at loopkeeper_sha, not from the pull request under review. A stale
+# pin silently reviews every later change with the older adapter.
 name: Loopkeeper Self-Review (posting)
 
 on:
@@ -30,12 +40,12 @@ jobs:
         (github.event.workflow_run.event == 'pull_request' &&
          github.event.workflow_run.pull_requests[0].number != null)
       }}
-    uses: nifabulous/loopkeeper/.github/workflows/pr-review-posting.yml@f1e92ab216382a3a000d95d33da6362008b706c0
+    uses: nifabulous/loopkeeper/.github/workflows/pr-review-posting.yml@c09aa78172b3335074d2c7697515c71ad90a737a
     with:
       consumer_repo: ${{ github.repository }}
       loopkeeper_repo: nifabulous/loopkeeper
       consumer_trusted_sha: ""
-      loopkeeper_sha: f1e92ab216382a3a000d95d33da6362008b706c0
+      loopkeeper_sha: c09aa78172b3335074d2c7697515c71ad90a737a
       ci_workflow_name: Loopkeeper CI
       ci_workflow_file: ci.yml
       expected_head_sha: ${{ github.event.workflow_run.head_sha || '' }}
