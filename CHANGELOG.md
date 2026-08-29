@@ -71,6 +71,15 @@ carried for pre-release behaviour.
 - Manifest path confinement fails closed on unexpected errors.
 - Package resources are read as content rather than as filesystem paths, which
   a zipimported install cannot provide.
+- The generic redactor declares the placeholders it substituted, and the prompt
+  states what a placeholder means. Previously the core reported placeholders
+  only when a plugin redactor was configured -- which the GitHub adapters never
+  are -- so a redacted value reached the model with nothing to distinguish it
+  from the file's own content, and was reported as a defect in the reviewed
+  code. Redaction strength is unchanged: no rule was relaxed.
+- Payment rules no longer fire inside a hexadecimal digest. A digit run within
+  a hash is an artefact of the encoding, and rewriting part of a checksum
+  destroyed evidence without protecting anything.
 
 ### Known limitations
 
@@ -81,6 +90,13 @@ carried for pre-release behaviour.
   review before it is trusted.
 - When a diff exceeds the evidence budget, the review states the coverage
   limitation and must not be read as exhaustive.
+- Redaction is calibrated for payment traffic, inherited from Relay. Rules whose
+  shape is ambiguous -- notably any run of eight or more digits -- still fire on
+  ordinary source, so a byte size or a row count can be replaced. The prompt now
+  states that placeholders are substitutions, which stops them being read as
+  defects, but the substitution itself remains. Narrowing the rules is not
+  simply an accuracy question: they are also what stops an identifier being
+  smuggled through untrusted content, where an attacker controls the context.
 
 <!-- Link definitions are added at publication. Until the v0.1.0 tag exists,
 a compare or release link would resolve to nothing. -->

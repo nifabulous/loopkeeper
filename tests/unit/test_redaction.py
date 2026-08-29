@@ -461,3 +461,92 @@ def test_relay_adapter_placeholder_set_is_declared_and_tested():
     for ph in placeholder_set:
         assert re.fullmatch(r"[A-Z][A-Z0-9_]{0,31}", ph), f"placeholder {ph!r} violates grammar"
 
+
+
+# ---------------------------------------------------------------------------
+# Code-review evidence integrity
+#
+# The generic core reads source diffs far more often than payment messages.
+# Corrupting benign technical content is not merely noisy: the model cannot
+# distinguish a placeholder from the file's own text, so it reports the
+# corruption as a defect in the code under review. Loopkeeper #17.
+# ---------------------------------------------------------------------------
+
+
+def test_a_hexadecimal_digest_survives_redaction_intact():
+    """A digit run inside a hash is encoding, not a payment identifier."""
+    digest = "08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"
+    line = f'    hash = "sha256:{digest}"\n'
+
+    assert sanitize(line) == line
+
+
+def test_digest_forms_across_hash_functions_survive():
+    for digest in (
+        "d41d8cd98f00b204e9800998ecf8427e",  # md5, 32
+        "da39a3ee5e6b4b0d3255bfef95601890afd80709",  # sha1, 40
+        "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
+        "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",  # sha512
+    ):
+        line = f"  checksum = {digest}\n"
+        assert sanitize(line) == line, digest
+
+
+def test_a_decimal_run_of_digest_length_is_still_redacted():
+    """The digest exemption requires hex letters, so digits alone never qualify."""
+    line = "  value = " + "1" * 64 + "\n"
+
+    assert "1" * 64 not in sanitize(line)
+
+
+def test_a_lockfile_record_survives_redaction_intact():
+    record = (
+        "[[package]]\n"
+        'name = "build"\n'
+        'version = "1.6.0"\n'
+        'sdist = { url = "https://files.pythonhosted.org/packages/4d/b7/'
+        'build-1.6.0.tar.gz", hash = "sha256:bd2c8afc603e7a2e0ce70e2ea85f0a6d'
+        '02043bafbd307f5bada0f98669eca5af", size = 113825 }\n'
+    )
+
+    assert sanitize(record) == record
+
+
+def test_the_generic_core_declares_the_placeholders_it_substituted():
+    """Without a plugin the core still reports what it removed.
+
+    Reporting nothing is what let `size = [ACCOUNT]` reach the model with no
+    indication that the value had been removed by this harness.
+    """
+    result = sanitize_with_metadata("size = 12345678\n")
+
+    assert result.text == "size = [ACCOUNT]\n"
+    assert result.placeholders == ("ACCOUNT",)
+
+
+def test_declared_placeholders_follow_the_placeholder_grammar():
+    result = sanitize_with_metadata(
+        "account 100200300400, ada@example.com, card 4111 1111 1111 1111\n"
+    )
+
+    import re
+
+    assert result.placeholders
+    for placeholder in result.placeholders:
+        assert re.fullmatch(r"[A-Z][A-Z0-9_]{0,31}", placeholder), placeholder
+
+
+def test_clean_source_declares_no_placeholders():
+    result = sanitize_with_metadata("def total(amount: int) -> int:\n    return amount\n")
+
+    assert result.placeholders == ()
+
+
+def test_a_grouped_identifier_is_redacted_without_a_valid_check_digit():
+    """The card rule guards grouped identifiers, not only issued cards.
+
+    A Luhn check would name real cards precisely and let this through.
+    """
+    sanitized = sanitize("Ref 1234 5678 9012 3456 here.\n")
+
+    assert "1234 5678 9012 3456" not in sanitized

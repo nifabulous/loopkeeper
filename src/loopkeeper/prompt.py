@@ -72,7 +72,18 @@ def render_review_prompt(
     handling = _bound(policy.data_handling, MAX_SECTION_BYTES)
     if redaction.placeholders:
         placeholder_list = ", ".join(redaction.placeholders)
-        handling = handling + f"\n\nActive redaction placeholders: {placeholder_list}."
+        # Naming the placeholders is not enough. Without saying what they are,
+        # a reader takes `size = [ACCOUNT]` for the file's own content and
+        # reports it as malformed input -- a defect in the harness rendered as
+        # a defect in the code under review.
+        handling = handling + (
+            f"\n\nActive redaction placeholders: {placeholder_list}."
+            " A bracketed placeholder marks a value this harness removed before"
+            " you saw it. It is substituted text, never the file's own content,"
+            " and it is not evidence of invalid syntax, malformed data, or any"
+            " other defect. Do not report a finding whose subject is a"
+            " placeholder, and do not infer the removed value."
+        )
     parts.append(handling)
 
     # Consumer-owned sections follow the structural guidance, in the order the

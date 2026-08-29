@@ -9,6 +9,16 @@ grammar, and deduplication.
 
 BIC/SWIFT codes are preserved (public directory data), matching the codex
 sanitizer corpus.
+
+This is the *generic* core, and the text it sees is usually a source diff
+rather than a payment message.  Rules whose shape is ambiguous across those
+two worlds are therefore decided by context, not by shape alone: an account
+number needs a cue term near it, a card number needs its Luhn check digit, and
+neither rule looks inside a hexadecimal digest.  Redaction that fires on a byte
+size or a hash is not merely noisy -- it hands the model corrupted evidence,
+which the model then reports as a defect in the code under review.
+``loopkeeper.adapters.relay.redactor`` keeps the unconditional payment rules
+for callers whose input really is payment traffic.
 """
 
 from __future__ import annotations
@@ -128,9 +138,41 @@ _IBAN_RE = re.compile(
 )
 _PHONE_RE = re.compile(r"\+?\(?\d[\d\s().-]{7,17}\d")
 _ACCOUNT_RE = re.compile(r"\b\d{8,}\b")
+# _ACCOUNT_RE stays deliberately unconditional. Requiring a nearby cue term
+# would read better on ordinary source, but the rule also exists to stop an
+# identifier being smuggled through untrusted content, and an attacker simply
+# omits the cue. See test_a_coordinate_attribute_cannot_smuggle_an_identifier_
+# through: the shape has to be enough on its own.
 _BIC_RE = re.compile(r"\b[A-Za-z]{4}[A-Za-z]{2}[A-Za-z0-9]{2}(?:[A-Za-z0-9]{3})?\b")
 _BIC_CUE_RE = re.compile(r"(?:\bbic|\bswift\s+(?:code|codes|address|bic))\s*$", re.IGNORECASE)
 _ENGLISH_INFLECTION_SUFFIXES = ("ES", "ED", "ING", "LY", "ION", "MENT", "NESS")
+
+_HEX_CHARACTERS = frozenset("0123456789abcdefABCDEF")
+_HEX_LETTERS = frozenset("abcdefABCDEF")
+# Digest lengths start at 32 hex characters (MD5). Anything shorter is left to
+# the payment rules, so a card number never qualifies on length alone.
+_MIN_DIGEST_HEX_CHARACTERS = 32
+
+
+def _within_hex_digest(match: re.Match[str]) -> bool:
+    """True when ``match`` lies inside a hexadecimal digest.
+
+    A digit run inside a hash is an artefact of the encoding, not a payment
+    identifier: the alphabet and the length are fixed by the hash function.
+    Expanding the match to its surrounding hex run and testing that run is
+    exact, so a delimited card number can never be mistaken for a digest.
+    """
+    text = match.string
+    start, end = match.start(), match.end()
+    while start > 0 and text[start - 1] in _HEX_CHARACTERS:
+        start -= 1
+    while end < len(text) and text[end] in _HEX_CHARACTERS:
+        end += 1
+    token = text[start:end]
+    if len(token) < _MIN_DIGEST_HEX_CHARACTERS:
+        return False
+    # A run of that length with no hex letter is decimal, not a digest.
+    return any(character in _HEX_LETTERS for character in token)
 
 
 def _looks_like_bic(token: str, prefix: str) -> bool:
@@ -163,6 +205,12 @@ def _redact_bic(match: re.Match[str]) -> str:
     return token
 
 
+def _redact_account(match: re.Match[str]) -> str:
+    if _within_hex_digest(match):
+        return match.group(0)
+    return "[ACCOUNT]"
+
+
 def _apply_rules(value: str, *, include_bic: bool) -> str:
     value = _TUTOR_SECRET_RE.sub("[SECRET]", value)
     value = _EMAIL_RE.sub("[EMAIL]", value)
@@ -171,7 +219,7 @@ def _apply_rules(value: str, *, include_bic: bool) -> str:
     if include_bic:
         value = _BIC_RE.sub(_redact_bic, value)
     value = _PHONE_RE.sub(_redact_phone, value)
-    value = _ACCOUNT_RE.sub("[ACCOUNT]", value)
+    value = _ACCOUNT_RE.sub(_redact_account, value)
     return value
 
 
@@ -267,10 +315,17 @@ _EXEMPT_RULES = (
 
 
 def _redact_card(match: re.Match[str]) -> str:
-    digits = sum(character.isdigit() for character in match.group(0))
+    # A Luhn check would name real cards precisely, but this rule is not only a
+    # card detector: it is the only thing standing between a grouped 13-19
+    # digit identifier and the model. Requiring a valid check digit lets
+    # "1234 5678 9012 3456" through, so length stays the test.
+    token = match.group(0)
+    if _within_hex_digest(match):
+        return token
+    digits = sum(character.isdigit() for character in token)
     if 13 <= digits <= 19:
         return "[REDACTED_CARD]"
-    return match.group(0)
+    return token
 
 
 def _sanitize_exempt_literal(literal: str) -> str:
@@ -318,6 +373,37 @@ def _generic_redact(text: str) -> str:
     return "".join(_sanitize_line(line) for line in text.splitlines(keepends=True))
 
 
+# Every placeholder the generic core can substitute. A reader of the sanitized
+# text -- including the model -- cannot otherwise tell a placeholder from the
+# file's own content, and will read `size = [ACCOUNT]` as malformed input
+# rather than as a value this sanitizer removed.
+GENERIC_PLACEHOLDERS: tuple[str, ...] = (
+    "ACCOUNT",
+    "BIC",
+    "EMAIL",
+    "IBAN",
+    "PHONE",
+    "REDACTED_CARD",
+    "REDACTED_CLOUD_KEY",
+    "REDACTED_PRIVATE_KEY",
+    "REDACTED_SECRET_ASSIGNMENT",
+    "REDACTED_TOKEN",
+    "SECRET",
+    "UETR",
+)
+
+
+def _observed_placeholders(text: str) -> tuple[str, ...]:
+    """Return the generic placeholders present in ``text``, in vocabulary order.
+
+    Detection is by presence in the output rather than by instrumenting each
+    substitution, so a placeholder the untrusted input already contained is
+    also reported. That direction is harmless: it adds a name to an
+    explanatory line and never suppresses a redaction.
+    """
+    return tuple(name for name in GENERIC_PLACEHOLDERS if f"[{name}]" in text)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -328,11 +414,16 @@ def sanitize_with_metadata(text: str, redactor: Redactor | None = None) -> Redac
         raise TypeError("text must be str")
     generic = _generic_redact(text)
     if redactor is None:
-        return RedactionResult(generic, ())
+        return RedactionResult(generic, _observed_placeholders(generic))
     result = redactor.redact(generic)
     _validate_result(result)
-    normalized = _normalize_placeholders(result.placeholders)
     final_text = _generic_redact(result.text)
+    # Merge the plugin's declared placeholders with the core's own. Reporting
+    # only the plugin's left the core's substitutions undeclared whenever a
+    # plugin was configured, and undeclared entirely when one was not.
+    normalized = _normalize_placeholders(
+        tuple(result.placeholders) + _observed_placeholders(final_text)
+    )
     if len(final_text.encode("utf-8")) > _MAX_OUTPUT_BYTES:
         raise SecurityError("sanitized output exceeds byte ceiling")
     return RedactionResult(final_text, normalized)
