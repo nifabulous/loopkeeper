@@ -363,3 +363,102 @@ def test_callers_reevaluate_on_label_change(path):
     types = {t.strip() for t in types_line.group(1).split(",")}
     assert "labeled" in types, f"{path.name} does not re-evaluate on labeled"
     assert "unlabeled" in types, f"{path.name} does not re-evaluate on unlabeled"
+
+
+# ---------------------------------------------------------------------------
+# Caller/callee permission subsetting
+#
+# A reusable workflow cannot request a permission its caller did not grant:
+# GitHub rejects the run with `startup_failure` before any job begins. That is
+# a silent class of break -- actionlint validates each file alone, and a string
+# comparison between two files will not catch it. Adding the eligibility job
+# with `issues: read` broke every documented caller this way.
+# ---------------------------------------------------------------------------
+
+_PERMISSION_RANK = {"none": 0, "read": 1, "write": 2}
+
+
+def _workflow_permissions(raw: str) -> dict[str, str]:
+    """Top-level ``permissions:`` block of a workflow."""
+    block = re.search(r"^permissions:\n((?:  [\w-]+: \w+\n)+)", raw, re.MULTILINE)
+    if block is None:
+        return {}
+    return dict(re.findall(r"  ([\w-]+): (\w+)", block.group(1)))
+
+
+def _job_permissions(raw: str) -> dict[str, dict[str, str]]:
+    """Per-job ``permissions:`` blocks, keyed by job id."""
+    found: dict[str, dict[str, str]] = {}
+    job: str | None = None
+    inside = False
+    for line in raw.splitlines():
+        job_match = re.match(r"^  ([a-z][\w-]*):$", line)
+        if job_match:
+            job, inside = job_match.group(1), False
+            continue
+        if re.match(r"^    permissions:$", line):
+            inside = True
+            continue
+        entry = re.match(r"^      ([\w-]+): (\w+)$", line)
+        if inside and entry and job is not None:
+            found.setdefault(job, {})[entry.group(1)] = entry.group(2)
+        elif inside and line.strip() and not line.startswith("      "):
+            inside = False
+    return found
+
+
+def _callers() -> list[tuple[Path, Path]]:
+    """Every caller paired with the reusable workflow it invokes."""
+    pairs: list[tuple[Path, Path]] = []
+    candidates = sorted((ROOT / ".github/workflows").glob("*.yml")) + sorted(
+        (ROOT / "examples/github").glob("*.yml")
+    )
+    for path in candidates:
+        raw = path.read_text(encoding="utf-8")
+        for called in re.findall(
+            r"uses: [\w.-]+/[\w.-]+/\.github/workflows/([\w.-]+\.yml)@", raw
+        ):
+            target = ROOT / ".github/workflows" / called
+            if target.exists():
+                pairs.append((path, target))
+    return pairs
+
+
+def test_every_caller_is_paired_with_a_reusable_workflow():
+    """Guard the discovery itself: a silent empty list would pass every case."""
+    pairs = _callers()
+
+    assert pairs, "no caller/callee pairs discovered"
+    callers = {caller.name for caller, _ in pairs}
+    assert "loopkeeper-pr-review.yml" in callers
+    assert "pr-review-caller.yml" in callers
+    assert "pr-review-posting-caller.yml" in callers
+
+
+def test_no_called_job_requests_a_permission_its_caller_withholds():
+    for caller, called in _callers():
+        granted = _workflow_permissions(caller.read_text(encoding="utf-8"))
+        assert granted, f"{caller.name} declares no permissions block"
+        for job, wanted in _job_permissions(called.read_text(encoding="utf-8")).items():
+            for scope, level in wanted.items():
+                have = granted.get(scope, "none")
+                assert _PERMISSION_RANK[level] <= _PERMISSION_RANK[have], (
+                    f"{called.name} job {job!r} wants {scope}: {level}, but caller "
+                    f"{caller.name} grants {scope}: {have}. GitHub fails the run "
+                    f"at startup."
+                )
+
+
+def test_the_eligibility_job_keeps_the_issues_scope_its_probe_needs():
+    """Pins the specific scope, so removing it from callers fails loudly."""
+    for name in ("pr-review.yml", "pr-review-posting.yml"):
+        raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+        assert _job_permissions(raw)["eligibility"]["issues"] == "read", name
+
+    for name in (
+        ".github/workflows/loopkeeper-pr-review.yml",
+        "examples/github/pr-review-caller.yml",
+        "examples/github/pr-review-posting-caller.yml",
+    ):
+        granted = _workflow_permissions((ROOT / name).read_text(encoding="utf-8"))
+        assert granted.get("issues") == "read", name

@@ -12,7 +12,15 @@ For the normal setup, use `pr-review-posting-caller.yml`. It calls the
 `pull-requests: write`, and posts the complete review comment by default.
 Set `post_comments: false` to keep the run artifact-only, or use
 `pr-review-caller.yml` when the caller should request only
-`contents: read`, `actions: read`, `checks: read`, and `pull-requests: read`.
+`contents: read`, `actions: read`, `checks: read`, `issues: read`, and
+`pull-requests: read`.
+
+Both entrypoints require `issues: read`. The eligibility probe reads the
+pull request's timeline to establish who applied the approval label, and that
+timeline is served by the issues API. A caller that omits the scope does not
+degrade gracefully: a reusable workflow may not request a permission its
+caller withheld, so GitHub rejects the run with `startup_failure` before any
+job begins, and no review is produced or reported.
 
 The read-only entrypoint remains available as the least-privilege option. The
 posting entrypoint's default is deliberately scoped to that explicit posting
