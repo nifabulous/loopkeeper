@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from loopkeeper.adapters.github.workflow_identity import (
     WorkflowLookupError,
     resolve_workflow_target,
@@ -109,7 +111,13 @@ def test_workflow_run_path_filters_event_head_and_open_pr():
 
 def test_caller_pins_remote_workflow_and_keeps_triggers_on_default_branch():
     raw = (ROOT / "examples/github/pr-review-caller.yml").read_text(encoding="utf-8")
-    assert "types: [opened, synchronize, reopened, ready_for_review]" in raw
+    # Assert the required types are present rather than an exact list: the set
+    # grew when fork authorization added labeled/unlabeled, and pinning the
+    # literal string made an intended contract change look like a regression.
+    types_line = re.search(r"types: \[([^\]]+)\]", raw)
+    assert types_line
+    types = {t.strip() for t in types_line.group(1).split(",")}
+    assert {"opened", "synchronize", "reopened", "ready_for_review"} <= types
     assert "workflows: [CI]" in raw
     assert re.search(r"uses: example-org/loopkeeper/.github/workflows/pr-review.yml@[0-9a-f]{40}", raw)
 
@@ -277,3 +285,81 @@ def test_every_workflow_shares_one_valid_default_model():
 
     # Must be bindable: a default that resolve_model rejects fails every run.
     _validate_model_shape(next(iter(values)), "workflow default")
+
+
+# ---------------------------------------------------------------------------
+# Fork authorization
+#
+# The model secret must be unreachable on any path a fork can take without an
+# authorized approval. That is enforced by job topology, not by a string in a
+# script: the eligibility job never maps the secret, and the job that does map
+# it cannot start except on a literal eligible=true.
+# ---------------------------------------------------------------------------
+
+REVIEW_WORKFLOWS = ("pr-review.yml", "pr-review-posting.yml")
+CALLERS = (
+    ROOT / ".github/workflows/loopkeeper-pr-review.yml",
+    ROOT / "examples/github/pr-review-caller.yml",
+    ROOT / "examples/github/pr-review-posting-caller.yml",
+)
+
+
+def _job_block(raw: str, name: str) -> str:
+    """Return the text of one top-level job."""
+    start = raw.index(f"\n  {name}:\n")
+    following = [
+        raw.index(f"\n  {other}:\n")
+        for other in ("resolve", "eligibility", "review", "writer")
+        if f"\n  {other}:\n" in raw and raw.index(f"\n  {other}:\n") > start
+    ]
+    return raw[start : min(following)] if following else raw[start:]
+
+
+@pytest.mark.parametrize("name", REVIEW_WORKFLOWS)
+def test_eligibility_job_never_maps_the_model_secret(name):
+    raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+    block = _job_block(raw, "eligibility")
+
+    assert "model_api_key" not in block, (
+        "the eligibility job must not receive the model secret; an unapproved "
+        "fork would otherwise be able to reach a paid model call"
+    )
+    assert "LOOPKEEPER_API_KEY" not in block
+
+
+@pytest.mark.parametrize("name", REVIEW_WORKFLOWS)
+def test_model_job_is_gated_on_a_literal_eligible_true(name):
+    raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+    block = _job_block(raw, "review")
+
+    assert "needs: [resolve, eligibility]" in block
+    assert "needs.eligibility.outputs.eligible == 'true'" in block, (
+        "gating must compare to the literal string 'true'; a missing output "
+        "must not satisfy the condition"
+    )
+    # The secret really is mapped in the gated job, so the gate matters.
+    assert "model_api_key" in block
+
+
+@pytest.mark.parametrize("name", REVIEW_WORKFLOWS)
+def test_eligibility_job_runs_the_bounded_probe_with_read_only_permission(name):
+    raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+    block = _job_block(raw, "eligibility")
+
+    assert "resolve_pr_eligibility.sh" in block
+    assert "pull-requests: read" in block
+    assert "issues: read" in block
+    for forbidden in ("pull-requests: write", "issues: write", "contents: write"):
+        assert forbidden not in block, f"eligibility job must stay read-only: {forbidden}"
+
+
+@pytest.mark.parametrize("path", CALLERS, ids=lambda p: p.name)
+def test_callers_reevaluate_on_label_change(path):
+    """Revoking approval must trigger a fresh evaluation, not leave a stale pass."""
+    raw = path.read_text(encoding="utf-8")
+    types_line = re.search(r"types: \[([^\]]+)\]", raw)
+
+    assert types_line, f"{path.name} declares no pull_request_target types"
+    types = {t.strip() for t in types_line.group(1).split(",")}
+    assert "labeled" in types, f"{path.name} does not re-evaluate on labeled"
+    assert "unlabeled" in types, f"{path.name} does not re-evaluate on unlabeled"

@@ -3,7 +3,9 @@ name: Loopkeeper PR Review (posting)
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # labeled/unlabeled are required: approving or revoking the fork
+    # approval label must trigger a fresh eligibility evaluation.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_run:
     workflows: [CI]
     types: [completed]

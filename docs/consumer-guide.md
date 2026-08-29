@@ -18,6 +18,26 @@ The read-only entrypoint remains available as the least-privilege option. The
 posting entrypoint's default is deliberately scoped to that explicit posting
 caller; selecting the read-only entrypoint never grants write permission.
 
+### Reviewing pull requests from forks
+
+Same-repository pull requests are reviewed automatically. A fork is reviewed
+only when a maintainer or admin applies the `loopkeeper-approved` label.
+
+The label is not itself the authorization — GitHub labels are not protected and
+anyone with triage permission can apply one. Loopkeeper checks the *actor who
+applied the currently effective label* and requires their current repository
+`role_name` to be exactly `maintain` or `admin`. A Write-role contributor
+cannot authorize a fork, and removing the label or downgrading that actor's
+role withdraws the approval on the next run.
+
+The shipped templates listen for `labeled` and `unlabeled` so approval and
+revocation both trigger a fresh evaluation. Keep those trigger types if you
+adapt a template.
+
+If the eligibility probe cannot read the evidence it needs, it fails closed and
+the fork is not reviewed. See the fork-authorization section of
+[`docs/github-adapter.md`](github-adapter.md) for the full contract.
+
 The caller owns all triggers. The reusable workflow accepts only
 `workflow_call`, resolves the consumer default-branch SHA from GitHub, and
 checks out the consumer and Loopkeeper repositories into separate directories.

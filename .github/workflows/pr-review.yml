@@ -96,8 +96,78 @@ jobs:
             echo "consumer_default_branch=$default_branch"
           } >>"$GITHUB_OUTPUT"
 
+  # Fork authorization. This job holds NO model secret: an unapproved fork must
+  # not be able to reach a paid model call, so the secret is mapped only in the
+  # job gated on this one's literal `eligible=true` output.
+  #
+  # It re-fetches the pull request rather than trusting the event payload,
+  # because an event is a snapshot and label state can change after it fires.
+  eligibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      eligible: ${{ steps.decide.outputs.eligible }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - name: Check out Loopkeeper at immutable release SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.loopkeeper_repo }}
+          ref: ${{ inputs.loopkeeper_sha }}
+          path: loopkeeper
+          fetch-depth: 1
+      - name: Verify Loopkeeper checkout before trusted reads
+        env:
+          LOOPKEEPER_SHA: ${{ inputs.loopkeeper_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C loopkeeper rev-parse HEAD)" == "$LOOPKEEPER_SHA" ]]
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Resolve fork eligibility
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ inputs.consumer_repo }}
+          PYTHONPATH: ${{ github.workspace }}/loopkeeper/src
+          LOOPKEEPER_CHECK_MAX_RAW_BYTES: ${{ vars.LOOPKEEPER_CHECK_MAX_RAW_BYTES || '200000' }}
+        run: |
+          set -euo pipefail
+          pr_number="${{ inputs.pr_number }}"
+          if [[ "$pr_number" == "0" ]]; then
+            pr_number="${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}"
+          fi
+          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || { echo "a PR number is required" >&2; exit 2; }
+          "$GITHUB_WORKSPACE/loopkeeper/adapters/github/resolve_pr_eligibility.sh" "$pr_number"
+      - name: Report the decision
+        if: always()
+        env:
+          ELIGIBLE: ${{ steps.decide.outputs.eligible }}
+          REASON: ${{ steps.decide.outputs.reason }}
+          OUTCOME: ${{ steps.decide.outcome }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Loopkeeper eligibility"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Eligible | \`${ELIGIBLE:-unknown}\` |"
+            echo "| Reason | \`${REASON:-unavailable}\` |"
+            echo "| Probe | \`$OUTCOME\` |"
+          } >>"$GITHUB_STEP_SUMMARY"
+
   review:
-    needs: resolve
+    # The model secret is mapped in this job, so it may only start on a
+    # literal eligible=true. A missing or non-true output blocks it.
+    needs: [resolve, eligibility]
+    if: ${{ needs.eligibility.outputs.eligible == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
