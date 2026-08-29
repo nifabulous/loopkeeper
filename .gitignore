@@ -36,3 +36,6 @@ Thumbs.db
 
 # Secrets / local env
 .env
+
+# Local planning scratch (not part of the release)
+docs/superpowers/
