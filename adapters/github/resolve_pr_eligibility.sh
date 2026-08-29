@@ -110,6 +110,18 @@ fetch_bounded_json() {
 fetch_bounded_json "pull request metadata" "$TEMP_DIR/pr.json" \
   "repos/${GH_REPO}/pulls/${PR_NUMBER}"
 
+# Validate the response SHAPE before interpreting any of it. Without this, a
+# missing or wrongly-typed `.labels` makes the label lookup below return false,
+# which is indistinguishable from a verified pull request that simply has no
+# approval label -- malformed evidence reported as an ordinary rejection.
+if ! jq -e '(.head.repo.full_name | type == "string")
+            and (.labels | type == "array")
+            and (all(.labels[]; type == "object" and (.name | type == "string")))' \
+  "$TEMP_DIR/pr.json" >/dev/null 2>&1; then
+  echo "pull request metadata did not match the expected shape (head.repo.full_name string, labels array of named objects); refusing to decide eligibility." >&2
+  exit 4
+fi
+
 HEAD_REPO="$(jq -r '.head.repo.full_name // empty' "$TEMP_DIR/pr.json")"
 if [[ -z "$HEAD_REPO" ]]; then
   echo "pull request reported no head repository; refusing to decide eligibility." >&2

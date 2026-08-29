@@ -256,6 +256,66 @@ def _escape_marker_like_text(text: str) -> str:
     return escaped
 
 
+
+# ---------------------------------------------------------------------------
+# Status indicators
+#
+# Rendered from the VALIDATED trailer, never from model prose, so the summary
+# is machine-truth: a model cannot claim a finding is resolved and have that
+# claim appear here. Every indicator is paired with its text label because
+# colour alone is not an accessible status signal, and GitHub renders these in
+# contexts where emoji may not display.
+# ---------------------------------------------------------------------------
+
+STATE_INDICATORS: dict[str, str] = {
+    "NEW": "\U0001F535",       # blue circle
+    "OPEN": "\U0001F7E1",      # yellow circle
+    "RESOLVED": "\U0001F7E2",  # green circle
+}
+UNVERIFIABLE_INDICATOR = "\u26AA"  # white circle: evidence pending
+_MAX_SUMMARY_ROWS = 25
+
+
+def status_indicator(state: str, unverifiable: bool = False) -> str:
+    """Return the indicator for a finding state, paired with its label."""
+    if unverifiable:
+        return f"{UNVERIFIABLE_INDICATOR} {state}"
+    return f"{STATE_INDICATORS.get(state, UNVERIFIABLE_INDICATOR)} {state}"
+
+
+def render_status_summary(trailer: Trailer) -> str:
+    """Render a deterministic status block for a validated trailer."""
+    counts = {"NEW": 0, "OPEN": 0, "RESOLVED": 0}
+    pending = 0
+    for finding in trailer.findings:
+        if finding.state in counts:
+            counts[finding.state] += 1
+        if finding.unverifiable is not None:
+            pending += 1
+
+    parts = [
+        f"{STATE_INDICATORS['NEW']} {counts['NEW']} new",
+        f"{STATE_INDICATORS['OPEN']} {counts['OPEN']} open",
+        f"{STATE_INDICATORS['RESOLVED']} {counts['RESOLVED']} resolved",
+    ]
+    if pending:
+        parts.append(f"{UNVERIFIABLE_INDICATOR} {pending} pending evidence")
+    lines = [f"**Verdict:** `{trailer.verdict}` — " + " \u00b7 ".join(parts)]
+
+    if trailer.findings:
+        lines += ["", "| Status | Severity | Category | Finding | File |", "|---|---|---|---|---|"]
+        for finding in trailer.findings[:_MAX_SUMMARY_ROWS]:
+            indicator = status_indicator(finding.state, finding.unverifiable is not None)
+            lines.append(
+                f"| {indicator} | {finding.sev} | `{finding.cat}` | `{finding.id}` | `{finding.file}` |"
+            )
+        remaining = len(trailer.findings) - _MAX_SUMMARY_ROWS
+        if remaining > 0:
+            lines.append(f"| … | | | {remaining} more finding(s) | |")
+
+    return "\n".join(lines)
+
+
 def render_comment(
     model_markdown: str,
     marker: str,
@@ -318,7 +378,15 @@ def render_comment(
     canonical_trailer = render_trailer(trailer_value)
     adapter_footer = f"{marker}\n{evidence_marker}"
     trailer_tail = f"\n\n{adapter_footer}\n\n{canonical_trailer}\n"
-    prose_budget = max_bytes - len(trailer_tail.encode("utf-8"))
+
+    # The status block is adapter-owned and derived from the validated trailer.
+    # It is dropped first under byte pressure: the prose carries the detail and
+    # the trailer carries the machine result, so neither may be sacrificed for
+    # a summary of them.
+    summary = render_status_summary(trailer_value) + "\n\n"
+    if len(summary.encode("utf-8")) + len(trailer_tail.encode("utf-8")) >= max_bytes:
+        summary = ""
+    prose_budget = max_bytes - len(trailer_tail.encode("utf-8")) - len(summary.encode("utf-8"))
     if prose_budget < 0:
         raise ValueError("max_bytes too small for marker/footer and review trailer")
     if len(prose.encode("utf-8")) > prose_budget:
@@ -326,9 +394,9 @@ def render_comment(
         note_budget = prose_budget - len(truncation_note.encode("utf-8"))
         if note_budget >= 0:
             prose = prose.encode("utf-8")[:note_budget].decode("utf-8", errors="ignore").rstrip()
-            return prose + truncation_note + trailer_tail.lstrip("\n")
+            return summary + prose + truncation_note + trailer_tail.lstrip("\n")
         prose = ""
-    return prose.rstrip() + trailer_tail
+    return summary + prose.rstrip() + trailer_tail
 
 
 # ---------------------------------------------------------------------------

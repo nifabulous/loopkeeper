@@ -405,3 +405,44 @@ def test_eligibility_is_reverified_before_the_model_secret_is_used(name):
     assert "exit 4" in block, "a withdrawn approval must fail closed"
     assert "model_api_key" not in block, "the re-check step must not hold the secret"
     assert "LOOPKEEPER_API_KEY" not in block
+
+
+# ---------------------------------------------------------------------------
+# Response shape (review finding: malformed-eligibility-response)
+#
+# The label lookup returns false for a missing or wrongly-typed `.labels`,
+# which is indistinguishable from a verified pull request that simply has no
+# approval label. Malformed evidence must be `unverifiable`, not a rejection.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "pr",
+    [
+        {"head": {"repo": {"full_name": FORK_REPO}}},                     # labels missing
+        {"head": {"repo": {"full_name": FORK_REPO}}, "labels": None},     # labels null
+        {"head": {"repo": {"full_name": FORK_REPO}}, "labels": "oops"},   # labels not a list
+        {"head": {"repo": {"full_name": FORK_REPO}}, "labels": [{"nom": "x"}]},  # entry unnamed
+        {"head": {"repo": {"full_name": FORK_REPO}}, "labels": ["plain-string"]},
+        {"head": {"repo": {"full_name": 42}}, "labels": []},              # head not a string
+    ],
+    ids=["missing", "null", "not-a-list", "unnamed-entry", "string-entry", "head-not-string"],
+)
+def test_structurally_malformed_pr_metadata_is_unverifiable(tmp_path, pr):
+    result, calls = _run(tmp_path, pr=pr)
+
+    assert result.returncode == EXIT_TRUST, (
+        f"malformed metadata was treated as an ordinary rejection: {result.stdout}"
+    )
+    assert _outputs(tmp_path).get("reason") != "unapproved-fork"
+    # It must not have proceeded to spend a permission call on broken evidence.
+    assert not any("/permission" in c for c in calls)
+
+
+def test_an_empty_but_well_formed_label_list_is_still_a_real_answer(tmp_path):
+    """The shape check must not turn 'no labels' into 'unverifiable'."""
+    result, _ = _run(tmp_path, pr=_pr_fixture(labels=[]))
+
+    assert result.returncode == 0, result.stderr
+    assert _outputs(tmp_path).get("eligible") == "false"
+    assert _outputs(tmp_path).get("reason") == "unapproved-fork"
