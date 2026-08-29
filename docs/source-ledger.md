@@ -8,10 +8,10 @@ workflow-name/file resolution and trigger sequencing tests.
 
 | Relay source at `e834773` | Lines | Destination | Responsibility after extraction |
 |---|---:|---|---|
-| `scripts/codex_arbiter.py` | 1446 | `src/loopkeeper/arbiter.py`; `adapters/github/arbiter_io.py` | Pure decisions in the package; GitHub collection/posting in the adapter |
+| `scripts/codex_arbiter.py` | 1446 | `src/loopkeeper/arbiter.py`; `src/loopkeeper/adapters/github/arbiter_io.py` | Pure decisions in the package; GitHub collection/posting in the adapter |
 | `scripts/codex_review_pr.sh` | 734 | `adapters/github/review_pr.sh` | GitHub event selection, trusted reads, collection, model invocation, and reviewer comment upsert |
 | `scripts/codex_responses.py` | 488 | `src/loopkeeper/transport.py` | Responses/Chat HTTP transport and budget enforcement |
-| `scripts/codex_sanitize.py` | 244 | `src/loopkeeper/redaction.py`; `adapters/relay/redactor.py` | Generic redaction core and Relay-specific compatibility hook |
+| `scripts/codex_sanitize.py` | 244 | `src/loopkeeper/redaction.py`; `src/loopkeeper/adapters/relay/redactor.py` | Generic redaction core and Relay-specific compatibility hook |
 | `scripts/agent_runner.py` | 233 | `src/loopkeeper/agent.py` | Trusted definition loading and headless agent execution |
 | `scripts/codex_triage_issue.sh` | 154 | `adapters/github/triage_issue.sh` | GitHub issue selection, sanitization, model call, and triage comment upsert |
 | `scripts/codex_untrusted.py` | 61 | `src/loopkeeper/untrusted.py` | Delimiter defanging and labelled untrusted blocks |

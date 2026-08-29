@@ -50,8 +50,8 @@ grep -q 'verify_consumer_checkout' "$ROOT/adapters/github/common.sh" || fail "sh
 triage_bounded_reads="$(grep -c '^[^#]*capture_bounded_stream' "$ROOT/adapters/github/triage_issue.sh" || true)"
 (( triage_bounded_reads >= 2 )) || fail "triage must bound both issue metadata reads"
 grep -q 'capture_bounded_stream.*CI runs' "$ROOT/adapters/github/review_pr.sh" || fail "CI discovery is not bounded"
-grep -q 'loopkeeper-superseded:' "$ROOT/adapters/github/comment_state.py" || fail "superseded marker missing"
-grep -q 'LOOPKEEPER_OPERATOR' "$ROOT/adapters/github/arbiter_io.py" || fail "arbiter writer gate missing"
+grep -q 'loopkeeper-superseded:' "$ROOT/src/loopkeeper/adapters/github/comment_state.py" || fail "superseded marker missing"
+grep -q 'LOOPKEEPER_OPERATOR' "$ROOT/src/loopkeeper/adapters/github/arbiter_io.py" || fail "arbiter writer gate missing"
 
 # Every action reference must be immutable. Local reusable workflow references
 # are checked separately by the workflow contract tests and are not action pins.
