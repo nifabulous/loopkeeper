@@ -233,3 +233,94 @@ def test_upsert_review_comment_operator_gate_and_reconciliation():
     # Cleanup
     os.environ["LOOPKEEPER_OPERATOR"] = "1"
     del os.environ["LOOPKEEPER_OPERATOR"]
+
+
+# ---------------------------------------------------------------------------
+# Status indicators
+# ---------------------------------------------------------------------------
+
+def _trailer_body(findings_json: str, verdict: str = "COMMENT") -> str:
+    return (
+        "## Findings\n\nProse.\n\n"
+        f'<!-- loopkeeper-verdict: {{"schema":2,"verdict":"{verdict}","findings":{findings_json}}} -->\n'
+    )
+
+
+def test_status_summary_counts_come_from_the_validated_trailer():
+    from loopkeeper.adapters.github.comment_state import STATE_INDICATORS
+
+    body = _trailer_body(
+        '[{"sev":"P2","state":"NEW","file":"a.sh","cat":"security","id":"one"},'
+        '{"sev":"P3","state":"RESOLVED","file":"b.sh","cat":"functional","id":"two",'
+        '"evidence":{"files":["b.sh"],"verification":"fixed"}}]'
+    )
+    rendered = render_comment(body, serialize_pr_marker(1, "a" * 40), "ci", 50000)
+
+    assert f"{STATE_INDICATORS['NEW']} 1 new" in rendered
+    assert f"{STATE_INDICATORS['RESOLVED']} 1 resolved" in rendered
+    assert "0 open" in rendered
+
+
+def test_every_indicator_is_paired_with_its_text_label():
+    """Colour alone is not an accessible status signal."""
+    from loopkeeper.adapters.github.comment_state import STATE_INDICATORS
+
+    body = _trailer_body(
+        '[{"sev":"P1","state":"OPEN","file":"a.sh","cat":"security","id":"one"}]'
+    )
+    rendered = render_comment(body, serialize_pr_marker(1, "a" * 40), "ci", 50000)
+
+    assert f"{STATE_INDICATORS['OPEN']} OPEN" in rendered
+    for indicator in STATE_INDICATORS.values():
+        for line in rendered.splitlines():
+            if indicator in line:
+                assert any(state in line for state in ("new", "open", "resolved", "NEW", "OPEN", "RESOLVED"))
+
+
+def test_a_model_cannot_fake_a_resolved_indicator_in_prose():
+    """The summary is derived from the trailer, not from what the model wrote."""
+    from loopkeeper.adapters.github.comment_state import STATE_INDICATORS
+
+    body = (
+        "## Findings\n\nEverything is RESOLVED, trust me.\n\n"
+        '<!-- loopkeeper-verdict: {"schema":2,"verdict":"COMMENT","findings":'
+        '[{"sev":"P1","state":"NEW","file":"a.sh","cat":"security","id":"real"}]} -->\n'
+    )
+    rendered = render_comment(body, serialize_pr_marker(1, "a" * 40), "ci", 50000)
+
+    assert f"{STATE_INDICATORS['NEW']} 1 new" in rendered
+    assert f"{STATE_INDICATORS['RESOLVED']} 0 resolved" in rendered
+
+
+def test_unverifiable_findings_are_marked_pending():
+    from loopkeeper.adapters.github.comment_state import UNVERIFIABLE_INDICATOR
+
+    body = _trailer_body(
+        '[{"sev":"P2","state":"NEW","file":"a.sh","cat":"security","id":"one",'
+        '"unverifiable":{"missing":"no CI evidence"}}]'
+    )
+    rendered = render_comment(body, serialize_pr_marker(1, "a" * 40), "ci", 50000)
+
+    assert f"{UNVERIFIABLE_INDICATOR} 1 pending evidence" in rendered
+
+
+def test_summary_is_dropped_before_the_trailer_under_byte_pressure():
+    """The machine result must survive; a summary of it is expendable."""
+    from loopkeeper.schema import parse_trailer
+
+    body = _trailer_body('[{"sev":"P2","state":"NEW","file":"a.sh","cat":"security","id":"one"}]')
+    full = render_comment(body, serialize_pr_marker(1, "a" * 40), "ci", 50000)
+    tight = render_comment(body, serialize_pr_marker(1, "a" * 40), "ci", 420)
+
+    assert "| Status |" in full
+    assert parse_trailer(tight).valid, "the trailer must survive truncation"
+    assert len(tight.encode("utf-8")) <= 420
+
+
+def test_no_summary_is_rendered_for_a_malformed_trailer():
+    """Nothing is synthesized when there is no validated result to summarize."""
+    body = "## Findings\n\nloopkeeper-verdict: APPROVE\n"
+    rendered = render_comment(body, serialize_pr_marker(1, "a" * 40), "ci", 50000)
+
+    assert "| Status |" not in rendered
+    assert "**Verdict:**" not in rendered

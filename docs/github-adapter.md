@@ -106,3 +106,96 @@ and passes PR content only through the untrusted channel.
 
 All API paths and git show arguments are quoted; `GH_REPO` is validated as
 `owner/name`; pagination is bounded, not unbounded `--paginate`.
+
+## Fork authorization
+
+A same-repository pull request is reviewed on its own. A pull request from a
+fork is reviewed only when the **currently effective** `loopkeeper-approved`
+label was applied by an actor whose **current** repository `role_name` is
+exactly `maintain` or `admin`.
+
+### GitHub labels are not a security boundary
+
+Nothing about a label is protected. Anyone with triage permission can add or
+remove one, and there is no per-label permission in GitHub. Loopkeeper
+therefore never treats the label as the authorization. The label only selects
+*whose* authority to check; the check is on the actor who applied it.
+
+### Why `role_name` and never `permission`
+
+The [repository-permissions endpoint](https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user)
+returns two fields. The legacy `permission` field reports the Maintain role as
+`write` and the Triage role as `read`, so a Write-role contributor is
+indistinguishable from a maintainer there. Only `role_name` carries the
+granular role, so only `role_name` is accepted. A response with no `role_name`
+fails closed rather than falling back.
+
+### Revocation and role changes
+
+Both are re-evaluated on every run, because both the label state and the role
+are re-fetched rather than cached:
+
+- **Removing the label** makes the next run `unapproved-fork`. Callers listen
+  for `unlabeled` so revocation triggers that run instead of leaving a stale
+  pass in place.
+- **Downgrading the applier's role** makes the next run `unauthorized-actor`,
+  even though the label is untouched. Authority is checked at review time, not
+  at label time.
+- **Re-applying the label** authorizes against the *most recent* applier. An
+  apply/remove/apply cycle cannot launder an earlier maintainer's approval into
+  cover for a later one by someone else.
+
+### Outcomes
+
+| Reason | Eligible | Meaning |
+|---|---|---|
+| `same-repository` | yes | Head and base are the same repository |
+| `authorized-fork` | yes | Label applied by a `maintain` or `admin` actor |
+| `unapproved-fork` | no | No label, or a different label |
+| `unauthorized-actor` | no | Label applied by someone without the role |
+| `unverifiable` | no, exit 4 | Evidence could not be read |
+
+`unverifiable` is deliberately separate. A 403, 404, 429, malformed body,
+oversized response, exhausted page budget, missing head repository, missing
+`role_name`, or a label present with no matching application in the bounded
+timeline all exit 4. None of them degrade into `unapproved-fork`: a rejection
+and an unreadable answer are different, and only the first is safe to report
+silently.
+
+### Where the secret lives
+
+The eligibility job maps **no model secret** and holds only read permission.
+The job that maps `model_api_key` declares `needs: [resolve, eligibility]` and
+`if: needs.eligibility.outputs.eligible == 'true'`, comparing to the literal
+string, so a missing or non-`true` output cannot satisfy it. An unapproved fork
+therefore cannot reach a paid model call — enforced by job topology, not by a
+check inside a script that already has the secret in its environment.
+
+Eligibility is then **re-verified inside the model job**, in the step
+immediately before the one that maps the secret. The job-level gate authorizes
+from a snapshot taken in a separate job, and an `unlabeled` event starts a new
+run rather than stopping an in-flight one. Without the second check, approval
+revoked after the probe ran could still reach the model. The re-check exits 4
+on a withdrawn approval and does not itself carry the secret.
+
+### API budget
+
+Every read is byte-bounded and page-bounded, and `--paginate` is never used. A
+same-repository pull request short-circuits before the permission call, so it
+spends no request on authority it does not need. Exhausting the timeline page
+budget is `unverifiable`, not an approval.
+
+The configured bounds arrive from the repository `vars` context, so the trusted
+code carries fixed hard ceilings and rejects any configured value above them:
+1 MB per response, 20 timeline pages, GitHub's 100-item page size, and a 4 MB
+**aggregate** budget across every response in one run. Bounding each response
+individually leaves the total unbounded once pagination is involved, so the
+aggregate is tracked separately and exits 4 when exceeded.
+
+### Operator note
+
+The collaborator-permission endpoint requires elevated access. If the workflow
+token cannot read it, the probe exits 4 and forks are simply never reviewed —
+fail-closed, but visible. Confirm this path during Stage B dogfood before
+relying on fork review, and check the eligibility job summary for the recorded
+reason.
