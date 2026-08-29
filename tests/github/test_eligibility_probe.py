@@ -78,12 +78,24 @@ def _pr_fixture(head_repo: str = FORK_REPO, labels: list[str] | None = None) -> 
     }
 
 
-def _timeline(events: list[tuple[str, str, str]]) -> list[dict]:
-    """Build a label timeline from (event, label, actor) tuples."""
-    return [
-        {"event": event, "label": {"name": label}, "actor": {"login": actor}}
-        for event, label, actor in events
+def _timeline(events: list[tuple[str, str, str]], descending: bool = False) -> list[dict]:
+    """Build a label timeline from (event, label, actor) tuples.
+
+    Tuples are given oldest-first and stamped with increasing `created_at`.
+    Pass ``descending=True`` to return the same events newest-first, which is
+    how the forge may order them: selection must not depend on that.
+    """
+    entries = [
+        {
+            "event": event,
+            "label": {"name": label},
+            "actor": {"login": actor},
+            "created_at": f"2026-01-0{index + 1}T00:00:00Z",
+            "id": 1000 + index,
+        }
+        for index, (event, label, actor) in enumerate(events)
     ]
+    return list(reversed(entries)) if descending else entries
 
 
 def _run(
@@ -137,7 +149,10 @@ def _run(
         text=True,
         cwd=str(tmp_path),
         stdin=subprocess.DEVNULL,
-        timeout=30,
+        # Generous enough to survive a loaded machine, tight enough to still
+        # catch a genuine hang. At 30s this failed intermittently in full-suite
+        # runs that took 2.6x longer than the same tests run alone.
+        timeout=120,
         check=False,
     )
     return result, log.read_text(encoding="utf-8").splitlines()
@@ -516,7 +531,13 @@ def test_unrelated_timeline_events_without_labels_are_still_accepted(tmp_path):
     timeline = [
         {"event": "commented", "actor": {"login": "someone"}},
         {"event": "committed"},
-        {"event": "labeled", "label": {"name": APPROVAL_LABEL}, "actor": {"login": "maint"}},
+        {
+            "event": "labeled",
+            "label": {"name": APPROVAL_LABEL},
+            "actor": {"login": "maint"},
+            "created_at": "2026-01-01T00:00:00Z",
+            "id": 1,
+        },
     ]
     result, _ = _run(
         tmp_path,
@@ -527,3 +548,102 @@ def test_unrelated_timeline_events_without_labels_are_still_accepted(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert _outputs(tmp_path).get("eligible") == "true"
+
+
+# ---------------------------------------------------------------------------
+# Applier selection must not depend on API ordering
+# (review finding: stale-label-applier-selection, P1)
+#
+# The timeline endpoint does not document its sort direction and pages are
+# concatenated without renormalising. Taking the positionally-last matching
+# event under a descending response selects the OLDEST application, letting a
+# fork reuse a maintainer's superseded approval after an unauthorised actor
+# re-applied the label.
+# ---------------------------------------------------------------------------
+
+_REAPPLY_SEQUENCE = [
+    ("labeled", APPROVAL_LABEL, "trusted-maintainer"),
+    ("unlabeled", APPROVAL_LABEL, "trusted-maintainer"),
+    ("labeled", APPROVAL_LABEL, "outsider"),
+]
+
+
+@pytest.mark.parametrize("descending", [False, True], ids=["ascending", "descending"])
+def test_newest_applier_is_selected_under_either_ordering(tmp_path, descending):
+    """The same events in either order must yield the same decision."""
+    result, _ = _run(
+        tmp_path,
+        pr=_pr_fixture(labels=[APPROVAL_LABEL]),
+        timeline=_timeline(_REAPPLY_SEQUENCE, descending=descending),
+        permission={"permission": "read", "role_name": "read"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _outputs(tmp_path).get("eligible") == "false"
+    assert _outputs(tmp_path).get("reason") == "unauthorized-actor", (
+        "a descending timeline selected the superseded maintainer approval"
+    )
+
+
+@pytest.mark.parametrize("descending", [False, True], ids=["ascending", "descending"])
+def test_authorized_reapplication_is_selected_under_either_ordering(tmp_path, descending):
+    """The mirror case: an outsider's approval superseded by a maintainer's."""
+    sequence = [
+        ("labeled", APPROVAL_LABEL, "outsider"),
+        ("unlabeled", APPROVAL_LABEL, "outsider"),
+        ("labeled", APPROVAL_LABEL, "trusted-maintainer"),
+    ]
+    result, _ = _run(
+        tmp_path,
+        pr=_pr_fixture(labels=[APPROVAL_LABEL]),
+        timeline=_timeline(sequence, descending=descending),
+        permission={"role_name": "maintain"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _outputs(tmp_path).get("eligible") == "true"
+    assert _outputs(tmp_path).get("reason") == "authorized-fork"
+
+
+def test_selection_is_stable_across_page_boundaries(tmp_path):
+    """Pages are concatenated unsorted; ordering must still not matter."""
+    scrambled = _timeline(_REAPPLY_SEQUENCE)
+    scrambled = [scrambled[2], scrambled[0], scrambled[1]]
+    result, _ = _run(
+        tmp_path,
+        pr=_pr_fixture(labels=[APPROVAL_LABEL]),
+        timeline=scrambled,
+        permission={"role_name": "read"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _outputs(tmp_path).get("reason") == "unauthorized-actor"
+
+
+def test_newest_event_removing_the_label_is_contradictory(tmp_path):
+    """Label present but newest event is `unlabeled`: evidence disagrees."""
+    result, _ = _run(
+        tmp_path,
+        pr=_pr_fixture(labels=[APPROVAL_LABEL]),
+        timeline=_timeline([
+            ("labeled", APPROVAL_LABEL, "trusted-maintainer"),
+            ("unlabeled", APPROVAL_LABEL, "trusted-maintainer"),
+        ]),
+        permission={"role_name": "maintain"},
+    )
+
+    assert result.returncode == EXIT_TRUST, result.stdout
+    assert _outputs(tmp_path).get("eligible") != "true"
+
+
+def test_timeline_entries_without_created_at_are_unverifiable(tmp_path):
+    """Selection needs a timestamp; without one, ordering is unknowable."""
+    result, _ = _run(
+        tmp_path,
+        pr=_pr_fixture(labels=[APPROVAL_LABEL]),
+        timeline=[{"event": "labeled", "label": {"name": APPROVAL_LABEL},
+                   "actor": {"login": "maintainer"}}],
+        permission={"role_name": "maintain"},
+    )
+
+    assert result.returncode == EXIT_TRUST, result.stdout

@@ -207,7 +207,8 @@ def _run(
         cwd=str(tmp_path),
         # No stdin: a guard that blocks on a read is a defect, not a pass.
         stdin=subprocess.DEVNULL,
-        timeout=30,
+        # Loose enough for a loaded machine, tight enough to catch a hang.
+        timeout=120,
         # Non-zero exit is the expected result in most cases here; each test
         # asserts the specific code rather than letting the runner raise.
         check=False,

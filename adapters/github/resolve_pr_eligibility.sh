@@ -161,14 +161,16 @@ while (( page <= LOOPKEEPER_ELIGIBILITY_MAX_PAGES )); do
               and all(.[]; type == "object" and (.event | type == "string"))
               and all(.[] | select(.event == "labeled" or .event == "unlabeled");
                       (.label.name | type == "string")
-                      and (.actor.login | type == "string"))' \
+                      and (.actor.login | type == "string")
+                      and (.created_at | type == "string"))' \
     "$page_file" >/dev/null 2>&1; then
     echo "label timeline page ${page} did not match the expected shape; refusing to decide eligibility." >&2
     exit 4
   fi
   count="$(jq 'length' "$page_file")"
   jq -c '.[] | select((.event == "labeled") or (.event == "unlabeled"))
-         | {event, label: (.label.name // ""), actor: (.actor.login // "")}' \
+         | {event, label: (.label.name // ""), actor: (.actor.login // ""),
+            created_at: (.created_at // ""), id: (.id // 0)}' \
     "$page_file" >>"$TEMP_DIR/events.jsonl"
   (( count < LOOPKEEPER_ELIGIBILITY_PAGE_SIZE )) && break
   page=$((page + 1))
@@ -178,9 +180,30 @@ if (( page > LOOPKEEPER_ELIGIBILITY_MAX_PAGES )); then
   exit 4
 fi
 
-APPROVER="$(jq -s -r --arg label "$APPROVAL_LABEL" \
-  '[.[] | select(.event == "labeled" and .label == $label)] | last | .actor // ""' \
+# Select the effective application by TIMESTAMP, never by position. The
+# timeline endpoint does not document its sort direction, pages are
+# concatenated here without renormalising, and taking `last` under a
+# descending response would pick the OLDEST matching application -- letting a
+# fork reuse a maintainer's superseded approval after an unauthorised actor
+# re-applied the label. Sorting by (created_at, id) is correct under either
+# ordering and across page boundaries.
+#
+# If the newest event for this label is an `unlabeled` while the label is
+# still present, the evidence contradicts itself and is not an approval.
+EFFECTIVE="$(jq -s -c --arg label "$APPROVAL_LABEL" \
+  '[.[] | select(.label == $label)]
+   | sort_by([.created_at, (.id | tostring)])
+   | last // {}' \
   "$TEMP_DIR/events.jsonl")"
+EFFECTIVE_EVENT="$(jq -r '.event // ""' <<<"$EFFECTIVE")"
+APPROVER="$(jq -r '.actor // ""' <<<"$EFFECTIVE")"
+if [[ "$EFFECTIVE_EVENT" == "unlabeled" ]]; then
+  echo "the newest ${APPROVAL_LABEL} event removes the label while the label is still present; evidence is contradictory, refusing to decide eligibility." >&2
+  exit 4
+fi
+if [[ "$EFFECTIVE_EVENT" != "labeled" ]]; then
+  APPROVER=""
+fi
 if [[ -z "$APPROVER" || "$APPROVER" == "null" ]]; then
   # The label is present but no application appears in the bounded window.
   # That is ambiguous history, not an approval.
