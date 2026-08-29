@@ -24,7 +24,7 @@ def prepare_roots(tmp_path: Path, manifest: dict) -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(
                 "# Policy\n"
-                "## Categories\nfunctional security\n"
+                "## Categories\n- functional\n- security\n"
                 "## Severity\nP1 blocks merge.\n"
                 "## Lifecycle\nTrack findings across rounds.\n"
                 "## Data handling\nDo not store secrets.\n",

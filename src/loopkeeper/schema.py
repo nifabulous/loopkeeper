@@ -29,6 +29,22 @@ from .types import (
 
 _IDENTITY_KEBAB_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _IDENTITY_MAX_LEN = 64
+
+
+def is_identity_slug(value: object) -> bool:
+    """Return True for a canonical identity slug.
+
+    A canonical slug is 1-64 characters of lowercase kebab-case matching
+    ``^[a-z0-9]+(-[a-z0-9]+)*$``. This is the single grammar shared by
+    Schema-2 finding ids, Schema-2 finding categories, and trusted policy
+    categories, so a policy can never declare a category that the reviewer
+    trailer would then reject.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    if len(value) > _IDENTITY_MAX_LEN:
+        return False
+    return _IDENTITY_KEBAB_RE.fullmatch(value) is not None
 _FILE_MAX_LEN = 256
 _FILE_FORBIDDEN = ("<", ">", "`", "{", "}", "--")
 _UNVERIFIABLE_MISSING_MAX_LEN = 512
@@ -113,9 +129,9 @@ def _validate_trailer_dict(raw: object) -> tuple[Trailer | None, str | None]:
         # identity checks
         fid = finding["id"]
         cat = finding["cat"]
-        if len(fid) > _IDENTITY_MAX_LEN or not _IDENTITY_KEBAB_RE.fullmatch(fid):
+        if not is_identity_slug(fid):
             return None, "bad-id"
-        if len(cat) > _IDENTITY_MAX_LEN or not _IDENTITY_KEBAB_RE.fullmatch(cat):
+        if not is_identity_slug(cat):
             return None, "bad-cat"
         file_val = finding["file"]
         if (

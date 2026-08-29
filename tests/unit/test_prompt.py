@@ -1,10 +1,11 @@
-import pytest
 from pathlib import Path
 
-from loopkeeper.policy import Policy, load_policy
+import pytest
+
+from loopkeeper.errors import ConfigError, SecurityError
+from loopkeeper.policy import load_policy
 from loopkeeper.prompt import Prompt, UntrustedArtifacts, render_review_prompt
 from loopkeeper.redaction import RedactionResult
-from loopkeeper.errors import ConfigError, SecurityError
 
 
 def test_prompt_uses_policy_and_active_redactor_placeholders(policy, artifacts):
@@ -125,3 +126,172 @@ def test_prompt_preserves_deterministic_order(policy, artifacts):
     prompt2 = render_review_prompt(policy, RedactionResult("safe", ()), artifacts)
     assert prompt1.instructions == prompt2.instructions
     assert prompt1.input_text == prompt2.input_text
+
+
+# ---------------------------------------------------------------------------
+# Domain-neutral policy contract
+#
+# Categories are consumer-defined canonical slugs declared as bullets under
+# exactly one "## Categories" section. Generic core carries no product
+# vocabulary, and any other H2 section is preserved rather than rejected.
+# ---------------------------------------------------------------------------
+
+
+class _Reader:
+    """Trusted reader stub that returns a fixed policy body."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def read_text(self, path: str, max_bytes: int) -> str:
+        return self._text
+
+
+def _load(tmp_path: Path, text: str):
+    policy_path = tmp_path / "policy.md"
+    policy_path.write_text("dummy", encoding="utf-8")
+    return load_policy(policy_path, tmp_path, _Reader(text))
+
+
+def _policy_text(categories: str, extra: str = "") -> str:
+    return (
+        "# Consumer Policy\n"
+        f"## Categories\n{categories}\n"
+        "## Severity\nP1 blocks merge.\n"
+        "## Lifecycle\nTrack findings across rounds.\n"
+        "## Data handling\nDo not store secrets.\n"
+        f"{extra}"
+    )
+
+
+def test_policy_accepts_arbitrary_consumer_category_slugs(tmp_path):
+    policy = _load(
+        tmp_path,
+        _policy_text("- database-migrations\n- accessibility\n- ml-safety\n"),
+    )
+
+    assert policy.categories == ("database-migrations", "accessibility", "ml-safety")
+
+
+def test_policy_preserves_unknown_h2_sections_in_source_order(tmp_path):
+    policy = _load(
+        tmp_path,
+        _policy_text(
+            "- accessibility\n",
+            "## Scope\nReview everything.\n## Deployment constraints\nNo Friday deploys.\n",
+        ),
+    )
+
+    assert [section.heading for section in policy.extra_sections] == [
+        "Scope",
+        "Deployment constraints",
+    ]
+    assert policy.extra_sections[1].content == "No Friday deploys."
+
+
+def test_prompt_renders_extra_sections_once_in_source_order(tmp_path, artifacts):
+    policy = _load(
+        tmp_path,
+        _policy_text(
+            "- accessibility\n",
+            "## Scope\nReview everything.\n## Deployment constraints\nNo Friday deploys.\n",
+        ),
+    )
+
+    prompt = render_review_prompt(policy, RedactionResult("safe", ()), artifacts)
+
+    assert prompt.instructions.count("## Scope") == 1
+    assert prompt.instructions.count("## Deployment constraints") == 1
+    assert prompt.instructions.index("## Scope") < prompt.instructions.index(
+        "## Deployment constraints"
+    )
+    assert prompt.instructions.index("## Categories") < prompt.instructions.index("## Scope")
+
+
+def test_policy_rejects_missing_explicit_categories_section(tmp_path):
+    text = (
+        "# Policy\n"
+        "## Scope\nReview everything.\n"
+        "## Severity\nsev\n"
+        "## Lifecycle\nlife\n"
+        "## Data handling\nhandle\n"
+    )
+    with pytest.raises(ConfigError, match="Categories"):
+        _load(tmp_path, text)
+
+
+def test_policy_rejects_prose_in_categories_section(tmp_path):
+    with pytest.raises(ConfigError):
+        _load(tmp_path, _policy_text("functional security\n"))
+
+
+def test_policy_rejects_duplicate_normalized_category(tmp_path):
+    with pytest.raises(ConfigError):
+        _load(tmp_path, _policy_text("- accessibility\n- accessibility\n"))
+
+
+def test_policy_rejects_invalid_or_oversized_category_slug(tmp_path):
+    for bad in ("- Not_A_Slug", "- trailing-", "- " + "a" * 65, "- has space"):
+        with pytest.raises(ConfigError):
+            _load(tmp_path, _policy_text(bad + "\n"))
+
+
+def test_policy_rejects_more_than_32_categories(tmp_path):
+    bullets = "".join(f"- category-{index}\n" for index in range(33))
+    with pytest.raises(ConfigError):
+        _load(tmp_path, _policy_text(bullets))
+
+    ok = "".join(f"- category-{index}\n" for index in range(32))
+    assert len(_load(tmp_path, _policy_text(ok)).categories) == 32
+
+
+def test_policy_rejects_duplicate_structural_section_aliases(tmp_path):
+    text = (
+        "# Policy\n"
+        "## Categories\n- accessibility\n"
+        "## Severity\nsev\n"
+        "## Severity guidance\nduplicate structural section\n"
+        "## Lifecycle\nlife\n"
+        "## Data handling\nhandle\n"
+    )
+    with pytest.raises(ConfigError):
+        _load(tmp_path, text)
+
+
+def test_extra_section_cannot_shadow_a_structural_section(tmp_path):
+    """An extra section must never be mistaken for a structural one."""
+    policy = _load(
+        tmp_path,
+        _policy_text("- accessibility\n", "## Scope\nReview everything.\n"),
+    )
+
+    headings = {section.heading.strip().lower() for section in policy.extra_sections}
+    assert headings == {"scope"}
+    assert policy.severity_guidance == "P1 blocks merge."
+
+
+def test_schema_two_accepts_the_same_category_slug_grammar(tmp_path):
+    """The prompt cannot request a category the Schema-2 trailer rejects."""
+    from loopkeeper.schema import is_identity_slug
+
+    policy = _load(
+        tmp_path,
+        _policy_text("- database-migrations\n- accessibility\n- ml-safety\n"),
+    )
+    for category in policy.categories:
+        assert is_identity_slug(category), category
+
+    assert not is_identity_slug("Not_A_Slug")
+    assert not is_identity_slug("trailing-")
+    assert not is_identity_slug("a" * 65)
+
+
+def test_generic_policy_core_carries_no_product_vocabulary():
+    """Generic core must not ship any consumer's category vocabulary."""
+    import loopkeeper.policy as policy_module
+    import loopkeeper.prompt as prompt_module
+
+    for module in (policy_module, prompt_module):
+        source = Path(module.__file__).read_text(encoding="utf-8").lower()
+        for forbidden in ("payment-domain", "tutor/ai", "tutor-ai", "relay"):
+            assert forbidden not in source, f"{module.__name__} leaks {forbidden!r}"

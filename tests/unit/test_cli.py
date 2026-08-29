@@ -89,7 +89,7 @@ def sign_manifest_for_fixture(manifest: dict, tmp_path: Path, key_id: str = "tes
         policy_path.parent.mkdir(parents=True, exist_ok=True)
         if not policy_path.exists():
             policy_path.write_text(
-                "# Test Policy\n## functional\ncontent\n## Security\ncontent\n## Severity\nlow\n## Lifecycle\nopen\n## Data handling\nnone\n",
+                "# Test Policy\n## Categories\n- functional\n- security\n## Severity\nlow\n## Lifecycle\nopen\n## Data handling\nnone\n",
                 encoding="utf-8",
             )
     for cf in trusted_cfg.get("context_files", []) or []:
@@ -110,7 +110,7 @@ def sign_manifest_for_fixture(manifest: dict, tmp_path: Path, key_id: str = "tes
     # For safety, also create fallback files under tmp_path itself
     fallback_policy = tmp_path / "policy.md"
     if not fallback_policy.exists():
-        fallback_policy.write_text("# Test Policy\n## functional\ncontent\n## Severity\nsev\n## Lifecycle\nlife\n## Data handling\nhandle\n", encoding="utf-8")
+        fallback_policy.write_text("# Test Policy\n## Categories\n- functional\n## Severity\nsev\n## Lifecycle\nlife\n## Data handling\nhandle\n", encoding="utf-8")
     for name in ["metadata.json", "diff.patch"]:
         fp = tmp_path / name
         if not fp.exists():

@@ -42,7 +42,7 @@ case "${args[0]:-}" in
     esac
     ;;
   show)
-    printf '# Stub Trusted Policy\n\n## Categories\nfunctional\n'
+    printf '# Stub Trusted Policy\n\n## Categories\n- functional\n'
     ;;
   *) exit 1 ;;
 esac

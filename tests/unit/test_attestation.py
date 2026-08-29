@@ -113,7 +113,7 @@ def signed_review_manifest(tmp_path: Path, signature: str | None = None, key_id:
     untrusted = tmp_path / "untrusted"
     trusted.mkdir(exist_ok=True)
     untrusted.mkdir(exist_ok=True)
-    (trusted / "policy.md").write_text("# Policy\n## Categories\nfunctional\n## Severity\nlow\n## Lifecycle\nopen\n## Data handling\nnone\n", encoding="utf-8")
+    (trusted / "policy.md").write_text("# Policy\n## Categories\n- functional\n## Severity\nlow\n## Lifecycle\nopen\n## Data handling\nnone\n", encoding="utf-8")
     (untrusted / "metadata.json").write_text("{}", encoding="utf-8")
     (untrusted / "diff.patch").write_text("diff", encoding="utf-8")
     return manifest_path

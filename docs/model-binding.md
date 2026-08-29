@@ -67,9 +67,51 @@ assert settings.max_input_bytes == 10
 
 ## Prompt composition
 
-`src/loopkeeper/policy.py` loads the review policy from the trusted path (`TrustedReader` bound to the verified root) and is the single source for categories, severity guidance, lifecycle rules, data handling, and display name. It rejects a path outside the trusted root, bounds each Markdown section, rejects duplicate or unknown machine-readable category headings, and preserves deterministic section order.
+`src/loopkeeper/policy.py` loads the review policy from the trusted path (`TrustedReader` bound to the verified root) and is the single source for categories, severity guidance, lifecycle rules, data handling, and display name. It rejects a path outside the trusted root, bounds each Markdown section, and preserves deterministic section order.
 
-`src/loopkeeper/prompt.py` renders the review prompt from that policy plus the active `RedactionResult`. The builder contains no product name, no payment placeholder list, and no second category table — consumer wording lives in trusted Markdown, not in adapter heredoc.
+Categories are consumer-defined. A policy declares its own canonical slugs as Markdown bullets under exactly one `## Categories` section:
+
+```markdown
+## Categories
+
+- functional
+- security
+- database-migrations
+```
+
+Between 1 and 32 entries are accepted. Each must be a canonical slug — 1-64 characters of lowercase kebab-case matching `^[a-z0-9]+(-[a-z0-9]+)*$`. That grammar is `loopkeeper.schema.is_identity_slug`, the same check applied to Schema-2 finding `cat` and `id` values, so a policy can never declare a category that the reviewer trailer would then reject.
+
+Four headings are structural: `Categories`, `Severity`, `Lifecycle`, and `Data handling` (with the aliases `Severity guidance`, `Lifecycle rules`, and `Finding lifecycle`). **Every other `##` section is preserved verbatim**, in source order, as `Policy.extra_sections`, and is rendered into the prompt after the structural guidance. A consumer can keep `## Scope` or `## Deployment constraints` in its policy without the loader reinterpreting or discarding it.
+
+### Migrating a pre-0.1.0 policy
+
+Implicit category discovery is gone. Two older forms now fail with a `ConfigError` naming the fix rather than being silently reinterpreted:
+
+- a per-category H2 heading, such as `## functional`, used to declare a category
+- prose inside `## Categories`, such as `functional security` on one line
+
+Before:
+
+```markdown
+## functional
+Check behavior.
+
+## Categories
+functional security
+```
+
+After:
+
+```markdown
+## Categories
+
+- functional
+- security
+```
+
+There is no compatibility fallback. Loopkeeper 0.1.0 has not been publicly released, so the previous fixed vocabulary — which accepted only one extraction source's categories and rejected everything else, including this repository's own `## Scope` section — is removed outright rather than carried forward.
+
+`src/loopkeeper/prompt.py` renders the review prompt from that policy plus the active `RedactionResult`. The builder contains no product name, no domain-specific placeholder list, and no second category table — consumer wording lives in trusted Markdown, not in adapter heredoc.
 The shared `REVIEW_TRAILER_CONTRACT` requires one final Schema-2 JSON trailer;
 the GitHub adapter uses the same contract and records bounded validation
 metadata before publishing a comment.

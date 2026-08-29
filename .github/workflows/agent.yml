@@ -76,7 +76,7 @@ jobs:
           (trusted / "agents" / source.name).write_bytes(source.read_bytes())
           (trusted / "policy.md").write_text(
               "# Loopkeeper Agent Policy\n"
-              "## Categories\nfunctional security\n"
+              "## Categories\n- functional\n- security\n"
               "## Severity\nPreserve trust boundaries.\n"
               "## Lifecycle\nReturn bounded results.\n"
               "## Data handling\nDo not store secrets.\n",

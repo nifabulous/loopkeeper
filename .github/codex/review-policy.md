@@ -4,6 +4,16 @@ Loopkeeper reviews are advisory evidence. A human owns the decision to change,
 merge, release, or deploy code. Never infer approval from a passing check or a
 model verdict.
 
+## Categories
+
+- functional
+- security
+- trust-separation
+- bounded-execution
+- redaction
+- release-integrity
+- verification
+
 ## Scope
 
 Review all changed production code, tests, documentation, CI workflows, and
@@ -22,6 +32,13 @@ finding from formatting preference or unsupported speculation.
 - **P2:** meaningful regression risk or missing coverage that should be fixed
   soon.
 - **P3:** lower-risk improvement that does not block merge.
+
+## Lifecycle
+
+A finding is NEW on its first appearance for a head, OPEN while it is still
+present in a later round, and RESOLVED only when the diff shows the change
+that fixes it. Do not mark a finding RESOLVED from a claim in a comment or
+from an absence of evidence; unavailable evidence is not a resolution.
 
 ## Data handling
 
