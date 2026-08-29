@@ -295,3 +295,47 @@ def test_generic_policy_core_carries_no_product_vocabulary():
         source = Path(module.__file__).read_text(encoding="utf-8").lower()
         for forbidden in ("payment-domain", "tutor/ai", "tutor-ai", "relay"):
             assert forbidden not in source, f"{module.__name__} leaks {forbidden!r}"
+
+
+# ---------------------------------------------------------------------------
+# Output-contract placement
+#
+# The PR A dogfood run produced a plain-text verdict line and a
+# MALFORMED-TRAILER result. The contract was rendered second, then buried
+# under the policy and preserved consumer sections.
+# ---------------------------------------------------------------------------
+
+
+def test_output_contract_is_the_final_instruction_section(tmp_path, artifacts):
+    """Nothing from the policy may follow the machine-readable contract."""
+    from loopkeeper.review_output import REVIEW_TRAILER_CONTRACT
+
+    policy = _load(
+        tmp_path,
+        _policy_text(
+            "- accessibility\n",
+            "## Scope\nReview everything.\n## Deployment constraints\nNo Friday deploys.\n",
+        ),
+    )
+    prompt = render_review_prompt(policy, RedactionResult("safe", ()), artifacts)
+
+    contract_at = prompt.instructions.index(REVIEW_TRAILER_CONTRACT.rstrip()[:60])
+    for marker in ("## Categories", "## Severity", "## Lifecycle", "## Data handling",
+                   "## Scope", "## Deployment constraints"):
+        assert prompt.instructions.index(marker) < contract_at, (
+            f"{marker} appears after the output contract"
+        )
+
+
+def test_output_contract_survives_a_large_policy(tmp_path, artifacts):
+    """A large trusted policy must not push the contract out of bounds."""
+    from loopkeeper.prompt import MAX_INSTRUCTIONS_BYTES
+    from loopkeeper.review_output import REVIEW_TRAILER_CONTRACT
+
+    bulky = "".join(f"## Section {index}\n{'padding. ' * 400}\n" for index in range(40))
+    policy = _load(tmp_path, _policy_text("- accessibility\n", bulky))
+    prompt = render_review_prompt(policy, RedactionResult("safe", ()), artifacts)
+
+    assert len(prompt.instructions.encode("utf-8")) <= MAX_INSTRUCTIONS_BYTES
+    assert '{"schema":2,"verdict":"CLEAN","findings":[]}' in prompt.instructions
+    assert prompt.instructions.rstrip().endswith(REVIEW_TRAILER_CONTRACT.rstrip().splitlines()[-1])

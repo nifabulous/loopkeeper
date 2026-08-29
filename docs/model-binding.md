@@ -112,6 +112,14 @@ After:
 There is no compatibility fallback. Loopkeeper 0.1.0 has not been publicly released, so the previous fixed vocabulary — which accepted only one extraction source's categories and rejected everything else, including this repository's own `## Scope` section — is removed outright rather than carried forward.
 
 `src/loopkeeper/prompt.py` renders the review prompt from that policy plus the active `RedactionResult`. The builder contains no product name, no domain-specific placeholder list, and no second category table — consumer wording lives in trusted Markdown, not in adapter heredoc.
+Contract placement is load-bearing. The contract is rendered as the **final**
+instruction section, after the policy and all trusted reference material, in
+both `prompt.py` and the GitHub adapter. When it was rendered first and a long
+policy followed, a model was observed ending its review with a plain-text
+verdict line, which fails closed as `MALFORMED-TRAILER`. Any provider or model
+swap must be re-verified against a real review, because trailer compliance is a
+property of the model, not of the transport.
+
 The shared `REVIEW_TRAILER_CONTRACT` requires one final Schema-2 JSON trailer;
 the GitHub adapter uses the same contract and records bounded validation
 metadata before publishing a comment.

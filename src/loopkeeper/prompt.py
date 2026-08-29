@@ -59,9 +59,6 @@ def render_review_prompt(
     # No hard-coded product name or placeholder list here
     parts: list[str] = []
     parts.append(f"# {policy.display_name}")
-    # Keep the machine-readable output contract near the start so a large
-    # trusted policy cannot truncate it away from the model instructions.
-    parts.append(REVIEW_TRAILER_CONTRACT.rstrip())
     # Categories – deterministic order as in policy
     parts.append("## Categories")
     for cat in policy.categories:
@@ -85,10 +82,24 @@ def render_review_prompt(
         parts.append(f"## {section.heading}")
         parts.append(_bound(section.content, MAX_SECTION_BYTES))
 
-    instructions = "\n\n".join(parts)
-    # Bound whole instructions
-    if len(instructions.encode("utf-8")) > MAX_INSTRUCTIONS_BYTES:
-        instructions = truncate_utf8(instructions, MAX_INSTRUCTIONS_BYTES)
+    # The machine-readable output contract is rendered last. It determines
+    # whether the review can be parsed at all, and a model that reads it
+    # first and a long policy afterwards has been observed to emit a
+    # plain-text verdict line instead of the required trailer.
+    #
+    # Its room is reserved *before* the policy-derived body is bounded, so
+    # truncating a large policy can never remove the contract itself.
+    contract = REVIEW_TRAILER_CONTRACT.rstrip()
+    separator = "\n\n"
+    reserved = len((separator + contract).encode("utf-8"))
+    body_budget = MAX_INSTRUCTIONS_BYTES - reserved
+    if body_budget <= 0:
+        raise ValueError("instruction budget is too small for the output contract")
+
+    body = "\n\n".join(parts)
+    if len(body.encode("utf-8")) > body_budget:
+        body = truncate_utf8(body, body_budget)
+    instructions = body + separator + contract
 
     # Build input_text from untrusted artifacts, each bounded and wrapped
     # Use untrusted blocks with defanging
