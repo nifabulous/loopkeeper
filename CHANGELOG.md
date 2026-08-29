@@ -6,16 +6,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+Everything below is staged for `0.1.0`, which has **not been published**. There
+is no `v0.1.0` tag and no PyPI release yet. At publication this section is
+renamed to `## [0.1.0] - <date>` and the comparison links are added then.
 
-## [0.1.0] — unreleased
-
-First release. Loopkeeper is the standalone extraction of Relay's review-loop
+Loopkeeper is the standalone extraction of Relay's review-loop
 harness: a provider-neutral, bounded, sanitized, trust-separated model-call
 loop with a pure deterministic arbiter. Pull-request review is one reference
 consumer, alongside issue triage and headless agent execution.
 
-Because this is the first release, everything below is new. There is no
+Because this will be the first release, everything below is new. There is no
 migration path from an earlier version, and no compatibility fallback is
 carried for pre-release behaviour.
 
@@ -82,5 +82,5 @@ carried for pre-release behaviour.
 - When a diff exceeds the evidence budget, the review states the coverage
   limitation and must not be read as exhaustive.
 
-[Unreleased]: https://github.com/nifabulous/loopkeeper/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/nifabulous/loopkeeper/releases/tag/v0.1.0
+<!-- Link definitions are added at publication. Until the v0.1.0 tag exists,
+a compare or release link would resolve to nothing. -->

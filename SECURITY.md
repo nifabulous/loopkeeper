@@ -6,10 +6,12 @@ boundary are welcome and taken seriously.
 
 ## Supported versions
 
-| Version | Supported |
+| Version | Status |
 |---|---|
-| `0.1.x` | Yes |
+| `0.1.x` | Will be supported once published; `0.1.0` is not yet released |
 | earlier | Not applicable — `0.1.0` is the first release |
+
+Until `0.1.0` is published, report against the current `main`.
 
 ## Reporting a vulnerability
 

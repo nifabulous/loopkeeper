@@ -19,8 +19,23 @@ from .truncate import truncate_utf8
 from .types import Evidence, Finding, Trailer
 
 REVIEW_TRAILER_CONTRACT = """## Output contract
-Return only a complete Markdown review. The final non-whitespace line must be exactly one schema-2 JSON trailer in an HTML comment:
+Return only a complete Markdown review. The final non-whitespace line must be exactly one schema-2 JSON trailer in an HTML comment.
+
+With no findings:
 <!-- loopkeeper-verdict: {\"schema\":2,\"verdict\":\"CLEAN\",\"findings\":[]} -->
+
+With findings, each finding uses exactly these field names:
+<!-- loopkeeper-verdict: {\"schema\":2,\"verdict\":\"COMMENT\",\"findings\":[{\"sev\":\"P2\",\"state\":\"NEW\",\"file\":\"path/to/file.py\",\"cat\":\"security\",\"id\":\"short-kebab-case-id\"}]} -->
+
+Finding fields, all required:
+- `sev`: one of P0, P1, P2, P3. Not `severity`.
+- `state`: one of NEW, OPEN, RESOLVED.
+- `file`: the affected path as a plain string. Not a list, and no line numbers.
+- `cat`: one category slug from the policy above, lowercase kebab-case. Not `category`.
+- `id`: a short stable lowercase kebab-case identifier for this finding.
+
+A finding with `state` RESOLVED additionally requires `\"evidence\":{\"files\":[\"path\"],\"verification\":\"what proves it\"}`. A finding you could not verify may add `\"unverifiable\":{\"missing\":\"what evidence was absent\"}`, which is not allowed with RESOLVED. Do not add any other field: `lines`, `title`, `severity`, `category`, `impact`, and `remediation` are not part of the trailer. Put that detail in the Markdown body instead.
+
 The reviewer verdict is advisory; the arbiter derives the merge disposition from the structured findings and history. Do not emit a plain-text `loopkeeper-verdict: approve` or `loopkeeper-verdict: comment` line, do not wrap the trailer in a code fence, do not emit more than one trailer, and do not place any text after `-->`.
 """
 
