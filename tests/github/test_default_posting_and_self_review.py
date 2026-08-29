@@ -7,7 +7,14 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CURRENT_RELEASE_SHA = "f1e92ab216382a3a000d95d33da6362008b706c0"
+
+# The self-review pin, asserted literally on purpose. Bumping it changes which
+# Loopkeeper revision reviews every later pull request, so it must be a
+# deliberate edit in its own pull request rather than something that can drift.
+# Update this constant only alongside the workflow, and only to a commit that
+# is already merged -- never to an unmerged head, which would let a change
+# review itself.
+CURRENT_RELEASE_SHA = "c09aa78172b3335074d2c7697515c71ad90a737a"
 
 
 def test_posting_pr_workflow_defaults_to_comments():
