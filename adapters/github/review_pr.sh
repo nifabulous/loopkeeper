@@ -82,7 +82,13 @@ LOOPKEEPER_BOT_LOGIN="${LOOPKEEPER_BOT_LOGIN:-github-actions[bot]}"
 : "${LOOPKEEPER_CHECK_MAX_RAW_BYTES:=200000}"
 : "${LOOPKEEPER_PR_FILE_PAGE_SIZE:=5}"
 : "${LOOPKEEPER_PR_FILE_MAX_PAGES:=100}"
-: "${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES:=1000}"
+# Per-file patch budget. LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES is an operator
+# override; when unset it is derived from the input budget and the actual
+# changed-file count once the PR metadata is known. A fixed 1000-byte cap
+# supplied roughly 7% of a 600000-byte budget on a 45-file pull request.
+: "${LOOPKEEPER_PR_FILE_BUDGET_PERCENT:=50}"
+: "${LOOPKEEPER_PR_FILE_MIN_PATCH_BYTES:=512}"
+: "${LOOPKEEPER_PR_FILE_PATCH_CEILING:=32768}"
 : "${LOOPKEEPER_CONTEXT_MAX_FILES:=10}"
 : "${LOOPKEEPER_CONTEXT_MAX_BYTES:=50000}"
 # LOOPKEEPER_MAX_OUTPUT_BYTES is already required above with :?; a default here
@@ -117,7 +123,8 @@ for bound in \
   LOOPKEEPER_CHECK_MAX_ITEMS LOOPKEEPER_CHECK_MAX_BYTES LOOPKEEPER_CHECK_MAX_PAGES \
   LOOPKEEPER_CHECK_MAX_RAW_BYTES \
   LOOPKEEPER_PR_FILE_PAGE_SIZE LOOPKEEPER_PR_FILE_MAX_PAGES \
-  LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES \
+  LOOPKEEPER_PR_FILE_BUDGET_PERCENT LOOPKEEPER_PR_FILE_MIN_PATCH_BYTES \
+  LOOPKEEPER_PR_FILE_PATCH_CEILING \
   LOOPKEEPER_CONTEXT_MAX_FILES LOOPKEEPER_CONTEXT_MAX_BYTES; do
   if [[ ! "${!bound}" =~ ^[1-9][0-9]*$ ]]; then
     echo "$bound must be a positive integer." >&2
@@ -125,6 +132,18 @@ for bound in \
   fi
 done
 
+if [[ -n "${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES:-}" && ! "${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES must be a positive integer when set." >&2
+  exit 2
+fi
+if (( LOOPKEEPER_PR_FILE_BUDGET_PERCENT > 100 )); then
+  echo "LOOPKEEPER_PR_FILE_BUDGET_PERCENT must not exceed 100." >&2
+  exit 2
+fi
+if (( LOOPKEEPER_PR_FILE_MIN_PATCH_BYTES > LOOPKEEPER_PR_FILE_PATCH_CEILING )); then
+  echo "LOOPKEEPER_PR_FILE_MIN_PATCH_BYTES must not exceed LOOPKEEPER_PR_FILE_PATCH_CEILING." >&2
+  exit 2
+fi
 if (( LOOPKEEPER_PR_FILE_PAGE_SIZE > 100 )); then
   echo "LOOPKEEPER_PR_FILE_PAGE_SIZE must not exceed GitHub's 100-item page limit." >&2
   exit 2
@@ -177,7 +196,7 @@ sys.stdout.buffer.write(data)
 }
 
 METADATA_FILE="$(mktemp)"
-if ! gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json number,title,body,url,state,baseRefName,headRefName,headRefOid \
+if ! gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json number,title,body,url,state,baseRefName,headRefName,headRefOid,changedFiles \
   | capture_bounded_stream "$LOOPKEEPER_CHECK_MAX_RAW_BYTES" "PR metadata" >"$METADATA_FILE"; then
   echo "PR metadata was unavailable or exceeded its byte bound; refusing to review." >&2
   exit 4
@@ -238,6 +257,30 @@ PY
   fi
 fi
 HEAD_REF_NAME="$(jq -r '.headRefName' <<<"$METADATA")"
+
+# Derive the per-file patch budget from the input budget and the actual
+# changed-file count, unless an operator pinned it explicitly. The aggregate
+# is still capped by capture_bounded_stream below, and that guard exits 4
+# rather than degrading, so the derived cap is clamped such that
+# files * cap can never approach LOOPKEEPER_MAX_INPUT_BYTES.
+PR_CHANGED_FILES="$(jq -r '.changedFiles // 0' <<<"$METADATA")"
+[[ "$PR_CHANGED_FILES" =~ ^[0-9]+$ ]] || PR_CHANGED_FILES=0
+if [[ -z "${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES:-}" ]]; then
+  patch_budget_share=$(( LOOPKEEPER_MAX_INPUT_BYTES * LOOPKEEPER_PR_FILE_BUDGET_PERCENT / 100 ))
+  if (( PR_CHANGED_FILES > 0 )); then
+    derived_patch_bytes=$(( patch_budget_share / PR_CHANGED_FILES ))
+  else
+    derived_patch_bytes="$LOOPKEEPER_PR_FILE_PATCH_CEILING"
+  fi
+  if (( derived_patch_bytes < LOOPKEEPER_PR_FILE_MIN_PATCH_BYTES )); then
+    derived_patch_bytes="$LOOPKEEPER_PR_FILE_MIN_PATCH_BYTES"
+  fi
+  if (( derived_patch_bytes > LOOPKEEPER_PR_FILE_PATCH_CEILING )); then
+    derived_patch_bytes="$LOOPKEEPER_PR_FILE_PATCH_CEILING"
+  fi
+  LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES="$derived_patch_bytes"
+  echo "Derived per-file patch budget ${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES} bytes for ${PR_CHANGED_FILES} changed file(s)." >&2
+fi
 if [[ -z "$LOOPKEEPER_CONTRACT_PATH" ]]; then
   CONTRACT_SLUG="${HEAD_REF_NAME//\//-}"
   CONTRACT_HASH="$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "$HEAD_REF_NAME")"
@@ -673,10 +716,8 @@ If the pull-request diff artifact says files_truncated=true or any file has patc
 Follow the exact trusted output contract below. Return only a complete Markdown review.
 EOF
 
-python3 - <<'PY' >>"$TEMP_DIR/prompt.txt"
-from loopkeeper.review_output import REVIEW_TRAILER_CONTRACT
-print(REVIEW_TRAILER_CONTRACT.rstrip())
-PY
+# The output contract is deliberately NOT appended here. It is emitted as the
+# final instruction section below, after the policy and reference material.
 
 # Trusted files are read from GIT OBJECTS at the verified SHA, never from working tree
 show_trusted() {
@@ -749,6 +790,18 @@ show_trusted() {
     context_count=$((context_count + 1))
     context_bytes=$((context_bytes + context_section_bytes))
   done <<<"$context_allowlist"
+
+  # The machine-readable output contract is emitted last, after the policy,
+  # the branch contract, and all trusted reference material. It is the
+  # instruction that decides whether the review can be parsed at all; when it
+  # was emitted first, a model was observed ending its review with a
+  # plain-text verdict line, which fails closed as MALFORMED-TRAILER.
+  printf '\n\n'
+  python3 - <<'PY'
+from loopkeeper.review_output import REVIEW_TRAILER_CONTRACT
+
+print(REVIEW_TRAILER_CONTRACT.rstrip())
+PY
 } >"$TEMP_DIR/review-instructions.md"
 
 {
