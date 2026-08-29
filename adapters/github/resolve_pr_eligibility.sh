@@ -29,6 +29,15 @@ if [[ ! "$GH_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
   exit 2
 fi
 
+# Hard ceilings live in trusted code. The configured values arrive from the
+# repository `vars` context, and bounded execution must be enforced here rather
+# than by trusting configuration: a mis-set variable would otherwise turn this
+# probe into an arbitrarily large resource and API operation.
+HARD_MAX_RAW_BYTES=1000000     # per response
+HARD_MAX_PAGES=20              # timeline pages
+HARD_MAX_PAGE_SIZE=100         # GitHub's own page limit
+HARD_MAX_TOTAL_BYTES=4000000   # aggregate across every response in one run
+
 : "${LOOPKEEPER_CHECK_MAX_RAW_BYTES:=200000}"
 : "${LOOPKEEPER_ELIGIBILITY_MAX_PAGES:=10}"
 : "${LOOPKEEPER_ELIGIBILITY_PAGE_SIZE:=100}"
@@ -39,10 +48,22 @@ for bound in LOOPKEEPER_CHECK_MAX_RAW_BYTES LOOPKEEPER_ELIGIBILITY_MAX_PAGES \
     exit 2
   fi
 done
-if (( LOOPKEEPER_ELIGIBILITY_PAGE_SIZE > 100 )); then
-  echo "LOOPKEEPER_ELIGIBILITY_PAGE_SIZE must not exceed GitHub's 100-item page limit." >&2
+if (( LOOPKEEPER_CHECK_MAX_RAW_BYTES > HARD_MAX_RAW_BYTES )); then
+  echo "LOOPKEEPER_CHECK_MAX_RAW_BYTES exceeds the hard ceiling ${HARD_MAX_RAW_BYTES}." >&2
   exit 2
 fi
+if (( LOOPKEEPER_ELIGIBILITY_MAX_PAGES > HARD_MAX_PAGES )); then
+  echo "LOOPKEEPER_ELIGIBILITY_MAX_PAGES exceeds the hard ceiling ${HARD_MAX_PAGES}." >&2
+  exit 2
+fi
+if (( LOOPKEEPER_ELIGIBILITY_PAGE_SIZE > HARD_MAX_PAGE_SIZE )); then
+  echo "LOOPKEEPER_ELIGIBILITY_PAGE_SIZE must not exceed GitHub's ${HARD_MAX_PAGE_SIZE}-item page limit." >&2
+  exit 2
+fi
+
+# Aggregate budget across every response. Per-response bounds alone leave the
+# total unbounded once pagination is involved.
+TOTAL_BYTES_READ=0
 
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -72,6 +93,13 @@ fetch_bounded_json() {
   fi
   if ! jq -e . "$out_file" >/dev/null 2>&1; then
     echo "${description} was not valid JSON; refusing to decide eligibility." >&2
+    exit 4
+  fi
+  local size
+  size="$(wc -c <"$out_file" | tr -d ' ')"
+  TOTAL_BYTES_READ=$((TOTAL_BYTES_READ + size))
+  if (( TOTAL_BYTES_READ > HARD_MAX_TOTAL_BYTES )); then
+    echo "eligibility evidence exceeded the aggregate byte ceiling ${HARD_MAX_TOTAL_BYTES}; refusing to decide eligibility." >&2
     exit 4
   fi
 }

@@ -328,3 +328,80 @@ def test_probe_source_carries_no_model_secret_and_no_unbounded_pagination():
     assert "role_name" in source
     # The legacy field must not drive the decision.
     assert 'jq -r .permission' not in source
+
+
+# ---------------------------------------------------------------------------
+# Hard ceilings (review finding: unbounded-configured-ceilings)
+#
+# The configured bounds arrive from the repository `vars` context. Bounded
+# execution has to be enforced by trusted code, not by trusting configuration,
+# so a mis-set variable must be rejected rather than obeyed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "var,value",
+    [
+        ("LOOPKEEPER_CHECK_MAX_RAW_BYTES", "999999999"),
+        ("LOOPKEEPER_ELIGIBILITY_MAX_PAGES", "10000"),
+        ("LOOPKEEPER_ELIGIBILITY_PAGE_SIZE", "500"),
+    ],
+)
+def test_configured_bounds_above_the_hard_ceiling_are_rejected(tmp_path, var, value):
+    result, calls = _run(
+        tmp_path,
+        pr=_pr_fixture(head_repo=BASE_REPO),
+        env_overrides={var: value},
+    )
+
+    assert result.returncode == 2, f"{var}={value} was accepted: {result.stderr}"
+    assert "hard ceiling" in result.stderr or "page limit" in result.stderr
+    # Rejected before any forge call.
+    assert calls == []
+
+
+def test_hard_ceilings_are_defined_in_trusted_code():
+    source = PROBE.read_text(encoding="utf-8")
+
+    for name in ("HARD_MAX_RAW_BYTES", "HARD_MAX_PAGES", "HARD_MAX_PAGE_SIZE",
+                 "HARD_MAX_TOTAL_BYTES"):
+        assert name in source, f"{name} must be a fixed ceiling in the script"
+
+
+def test_aggregate_byte_budget_is_tracked_across_responses():
+    """Per-response bounds leave the total unbounded once pagination starts."""
+    source = PROBE.read_text(encoding="utf-8")
+
+    assert "TOTAL_BYTES_READ" in source
+    assert "HARD_MAX_TOTAL_BYTES" in source
+    assert "aggregate byte ceiling" in source
+
+
+# ---------------------------------------------------------------------------
+# Time-of-check/time-of-use (review finding: stale-eligibility-before-model)
+#
+# The eligibility job authorizes from a snapshot in a separate job. An
+# `unlabeled` event starts a NEW run rather than stopping the in-flight one, so
+# the check must be repeated in the step immediately before the one holding the
+# model secret.
+# ---------------------------------------------------------------------------
+
+REVIEW_WORKFLOWS = ("pr-review.yml", "pr-review-posting.yml")
+
+
+@pytest.mark.parametrize("name", REVIEW_WORKFLOWS)
+def test_eligibility_is_reverified_before_the_model_secret_is_used(name):
+    raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+
+    recheck = raw.index("- name: Re-verify fork eligibility")
+    model_step = raw.index("- name: Run read-only review")
+    secret = raw.index("secrets.model_api_key")
+
+    assert recheck < model_step, "the re-check must precede the model step"
+    assert recheck < secret, "the re-check must precede the mapped model secret"
+
+    block = raw[recheck:model_step]
+    assert "resolve_pr_eligibility.sh" in block
+    assert "exit 4" in block, "a withdrawn approval must fail closed"
+    assert "model_api_key" not in block, "the re-check step must not hold the secret"
+    assert "LOOPKEEPER_API_KEY" not in block

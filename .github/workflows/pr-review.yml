@@ -204,6 +204,32 @@ jobs:
           [[ "$(git -C consumer rev-parse HEAD)" == "$CONSUMER_TRUSTED_SHA" ]]
           [[ "$(git -C loopkeeper rev-parse HEAD)" == "$LOOPKEEPER_SHA" ]]
 
+      - name: Re-verify fork eligibility immediately before model invocation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ inputs.consumer_repo }}
+          PYTHONPATH: ${{ github.workspace }}/loopkeeper/src
+          LOOPKEEPER_CHECK_MAX_RAW_BYTES: ${{ vars.LOOPKEEPER_CHECK_MAX_RAW_BYTES || '200000' }}
+        run: |
+          set -euo pipefail
+          # The eligibility job authorized from a snapshot taken in a separate
+          # job. Between then and now the label may have been removed or the
+          # applier downgraded, and an `unlabeled` event starts a NEW run rather
+          # than stopping this one. Re-check here, in the step immediately
+          # before the one that holds the model secret, so a revoked approval
+          # cannot still reach a paid model call.
+          pr_number="${{ inputs.pr_number }}"
+          if [[ "$pr_number" == "0" ]]; then
+            pr_number="${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}"
+          fi
+          [[ "$pr_number" =~ ^[1-9][0-9]*$ ]] || { echo "a PR number is required" >&2; exit 2; }
+          decision="$("$GITHUB_WORKSPACE/loopkeeper/adapters/github/resolve_pr_eligibility.sh" "$pr_number")"
+          echo "$decision"
+          case "$decision" in
+            *"eligible=true"*) ;;
+            *) echo "eligibility was withdrawn before model invocation; refusing to review." >&2; exit 4 ;;
+          esac
+
       - name: Run read-only review
         id: run_review
         working-directory: consumer

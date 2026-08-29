@@ -171,12 +171,26 @@ string, so a missing or non-`true` output cannot satisfy it. An unapproved fork
 therefore cannot reach a paid model call — enforced by job topology, not by a
 check inside a script that already has the secret in its environment.
 
+Eligibility is then **re-verified inside the model job**, in the step
+immediately before the one that maps the secret. The job-level gate authorizes
+from a snapshot taken in a separate job, and an `unlabeled` event starts a new
+run rather than stopping an in-flight one. Without the second check, approval
+revoked after the probe ran could still reach the model. The re-check exits 4
+on a withdrawn approval and does not itself carry the secret.
+
 ### API budget
 
 Every read is byte-bounded and page-bounded, and `--paginate` is never used. A
 same-repository pull request short-circuits before the permission call, so it
 spends no request on authority it does not need. Exhausting the timeline page
 budget is `unverifiable`, not an approval.
+
+The configured bounds arrive from the repository `vars` context, so the trusted
+code carries fixed hard ceilings and rejects any configured value above them:
+1 MB per response, 20 timeline pages, GitHub's 100-item page size, and a 4 MB
+**aggregate** budget across every response in one run. Bounding each response
+individually leaves the total unbounded once pagination is involved, so the
+aggregate is tracked separately and exits 4 when exceeded.
 
 ### Operator note
 
