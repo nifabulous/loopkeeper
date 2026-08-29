@@ -153,3 +153,51 @@ def test_truncation_disclosure_is_retained():
     assert "files_truncated" in source
     assert "Evidence coverage" in source
     assert "this review is not exhaustive" in source
+
+
+# ---------------------------------------------------------------------------
+# The contract must document a shape the parser accepts
+#
+# On pull request #13 the model emitted a correctly-wrapped HTML-comment
+# trailer -- placement worked -- but used `severity`/`category`/`lines`/`title`
+# for the finding fields instead of `sev`/`state`/`file`/`cat`/`id`. The
+# contract only ever showed `"findings":[]`, so the finding shape was never
+# demonstrated and the model guessed. Diagnostic was `bad-sev`.
+# ---------------------------------------------------------------------------
+
+
+def _contract_trailers() -> list[str]:
+    return re.findall(r"<!-- loopkeeper-verdict:.*?-->", REVIEW_TRAILER_CONTRACT)
+
+
+def test_contract_shows_both_an_empty_and_a_populated_example():
+    """A model cannot infer the finding shape from an empty array alone."""
+    trailers = _contract_trailers()
+    assert len(trailers) >= 2, "the contract must show a populated finding example"
+    assert any('"findings":[]' in t for t in trailers)
+    assert any('"findings":[{' in t for t in trailers)
+
+
+def test_every_example_in_the_contract_actually_parses():
+    """The contract may never document a shape the parser rejects."""
+    for trailer in _contract_trailers():
+        validation = parse_trailer(f"Review body.\n\n{trailer}\n")
+        assert validation.valid, (
+            f"contract example does not parse: {validation.error_code} "
+            f"({validation.diagnostic}) for {trailer[:80]}"
+        )
+
+
+def test_contract_names_the_exact_finding_fields():
+    """The field names the parser requires must be stated, not implied."""
+    for field in ('"sev"', '"state"', '"file"', '"cat"', '"id"'):
+        assert field in REVIEW_TRAILER_CONTRACT, f"contract omits {field}"
+    # And the wrong names the model actually reached for are called out.
+    assert "`severity`" in REVIEW_TRAILER_CONTRACT
+    assert "`category`" in REVIEW_TRAILER_CONTRACT
+
+
+def test_contract_is_pure_ascii():
+    """A stray non-ASCII character in the contract reaches the model verbatim."""
+    offenders = [c for c in REVIEW_TRAILER_CONTRACT if ord(c) > 127]
+    assert offenders == [], f"non-ASCII in contract: {offenders}"

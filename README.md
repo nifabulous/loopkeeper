@@ -59,6 +59,17 @@ workflow-name/file resolution tests.
 
 Package version is `0.1.0` (see `src/loopkeeper/__init__.py`).
 
+## Security
+
+Loopkeeper runs model calls in CI against attacker-influenced input, in jobs
+holding real credentials. The threat model is in
+[`docs/security.md`](docs/security.md); to report a vulnerability, see
+[SECURITY.md](SECURITY.md).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 Licensed under the Apache License, Version 2.0 — see [LICENSE](LICENSE) and
