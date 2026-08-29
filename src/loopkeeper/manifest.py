@@ -192,8 +192,10 @@ def _validate_untrusted_section(untrusted: object, limits: dict[str, int], untru
                 resolve_bounded_path(v, untrusted_root, max_bytes)
             except ManifestError:
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                # Fail closed. An error shape this loop did not anticipate is
+                # not evidence that the path is confined.
+                raise ManifestError(f"additional entry {k!r} could not be confined: {exc}") from exc
 
 
 def _validate_trust_verification(trust: dict[str, object]) -> None:

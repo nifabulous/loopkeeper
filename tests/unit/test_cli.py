@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from loopkeeper.artifacts import Provenance, resource_path, write_artifacts, render_artifact
+from loopkeeper.artifacts import Provenance, read_resource_text, write_artifacts, render_artifact
 from loopkeeper.cli import main as cli_main
 from loopkeeper.__main__ import main as module_main
 from loopkeeper.transport import ModelResponse
@@ -119,7 +119,7 @@ def sign_manifest_for_fixture(manifest: dict, tmp_path: Path, key_id: str = "tes
 
 
 def valid_fixture_manifest(tmp_path: Path) -> Path:
-    data = json.loads(resource_path("manifests/review.json").read_text(encoding="utf-8"))
+    data = json.loads(read_resource_text("manifests/review.json"))
     # If review.json is github-forge-verified, we need to convert to caller-attested for trust testing?
     # For this helper, we will use caller-attested signed version to ensure trust passes
     # If the fixture is already caller-attested without verification, sign it
@@ -164,7 +164,7 @@ def provenance(repo: str) -> Provenance:
 def test_invalid_review_trailer_is_a_successful_business_result(tmp_path, monkeypatch):
     monkeypatch.setattr("loopkeeper.transport.request_model", fake_bounded_model)
     manifest = sign_manifest_for_fixture(
-        json.loads(resource_path("manifests/review-invalid.json").read_text()),
+        json.loads(read_resource_text("manifests/review-invalid.json")),
         tmp_path,
         key_id="test-v1",
     )
@@ -219,7 +219,7 @@ def test_artifact_envelope_excludes_raw_model_and_api_key():
 
 def test_missing_verification_exits_four(tmp_path, monkeypatch):
     # Manifest without verification for caller-attested should exit 4
-    manifest = json.loads(resource_path("manifests/review-invalid.json").read_text())
+    manifest = json.loads(read_resource_text("manifests/review-invalid.json"))
     # Ensure it's caller-attested without verification
     manifest["trust"]["mode"] = "caller-attested"
     manifest["trust"].pop("verification", None)
@@ -248,7 +248,7 @@ def test_transport_failure_exits_three(tmp_path, monkeypatch):
 
     monkeypatch.setattr("loopkeeper.transport.request_model", failing_model)
     manifest = sign_manifest_for_fixture(
-        json.loads(resource_path("manifests/review.json").read_text()),
+        json.loads(read_resource_text("manifests/review.json")),
         tmp_path,
         key_id="test-v1",
     )
@@ -275,7 +275,7 @@ def test_business_disposition_exits_zero(tmp_path, monkeypatch):
 
     monkeypatch.setattr("loopkeeper.transport.request_model", valid_model)
     manifest = sign_manifest_for_fixture(
-        json.loads(resource_path("manifests/review.json").read_text()),
+        json.loads(read_resource_text("manifests/review.json")),
         tmp_path,
         key_id="test-v1",
     )
@@ -283,7 +283,7 @@ def test_business_disposition_exits_zero(tmp_path, monkeypatch):
     if manifest["trust"]["mode"] == "github-forge-verified":
         # For this test, we want signed caller-attested to test business path
         # Re-sign as caller-attested
-        data = json.loads(resource_path("manifests/review-invalid.json").read_text())
+        data = json.loads(read_resource_text("manifests/review-invalid.json"))
         manifest = sign_manifest_for_fixture(data, tmp_path, key_id="test-v1")
     manifest_path = tmp_path / "business.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -299,7 +299,7 @@ def test_cli_version_via_module_entrypoint(tmp_path, monkeypatch):
 def test_output_paths_stay_under_requested_dir(tmp_path, monkeypatch):
     monkeypatch.setattr("loopkeeper.transport.request_model", fake_bounded_model)
     manifest = sign_manifest_for_fixture(
-        json.loads(resource_path("manifests/review-invalid.json").read_text()),
+        json.loads(read_resource_text("manifests/review-invalid.json")),
         tmp_path,
         key_id="test-v1",
     )

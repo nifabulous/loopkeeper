@@ -519,82 +519,70 @@ def write_artifacts(output_dir: Path, artifacts: Mapping[str, str | bytes]) -> N
 
 
 # ---------------------------------------------------------------------------
-# Resource helper (importlib.resources)
+# Resource readers (importlib.resources)
 # ---------------------------------------------------------------------------
 
-def resource_path(name: str) -> Path:
-    """Return a :class:`Path` to a package resource.
+_RESOURCE_ROOT = "resources"
 
-    The helper uses :mod:`importlib.resources` so the manifests and schemas
-    are available from both an installed wheel and a source checkout.
-    Root-level consumer workflow templates remain repository documentation,
-    not package data.
+
+def _resource_parts(name: str) -> tuple[str, ...]:
+    """Validate a resource name and split it into safe path components."""
+    if not isinstance(name, str) or not name:
+        raise ValueError("resource name must be a non-empty string")
+    if _CONTROL_RE.search(name):
+        raise ValueError("resource name contains control characters")
+    if name.startswith(("/", "\\")):
+        raise ValueError(f"resource name {name!r} must be relative")
+    parts = tuple(part for part in name.split("/") if part)
+    if not parts:
+        raise ValueError(f"resource name {name!r} must name a file")
+    for part in parts:
+        if part in (".", "..") or "\\" in part:
+            raise ValueError(f"resource name {name!r} must not escape the resource root")
+    return parts
+
+
+def read_resource_bytes(name: str) -> bytes:
+    """Return the bytes of a packaged resource.
+
+    Content is returned rather than a filesystem path. A zipimported package
+    has no real file on disk, and ``importlib.resources.as_file()`` deletes
+    its extraction when the context exits, so any path handed back to a
+    caller would dangle.
 
     Args:
         name: Relative path under ``loopkeeper/resources`` such as
             ``"manifests/review.json"`` or ``"schemas/history.schema.json"``.
 
     Returns:
-        A :class:`Path` to the resource.
+        The resource contents as bytes.
 
     Raises:
+        ValueError: If the name is malformed or escapes the resource root.
         FileNotFoundError: If the resource does not exist.
     """
-    if not isinstance(name, str) or not name:
-        raise ValueError("resource name must be non-empty string")
-    if _CONTROL_RE.search(name):
-        raise ValueError("resource name contains control characters")
-    if name.startswith("/") or ".." in name.split("/"):
-        raise ValueError(f"resource name {name!r} must be relative and not escape")
-
-    # First try filesystem path relative to this file (source checkout)
-    candidate = Path(__file__).parent / "resources" / name
-    if candidate.exists():
-        return candidate
-
-    # Fallback via importlib.resources (wheel)
+    parts = _resource_parts(name)
     try:
-        from importlib.resources import files, as_file
+        from importlib.resources import files
+    except ImportError as exc:  # pragma: no cover - Python < 3.9
+        raise FileNotFoundError(f"resource {name!r} not readable: {exc}") from exc
 
-        # files("loopkeeper") / "resources" / name
-        resource = files("loopkeeper") / "resources" / name  # type: ignore[operator]
-        # If the resource is a real file, we can return its path via as_file context?
-        # For simplicity, try to get a concrete path
-        try:
-            # In Python 3.12+, files returns Traversable that may not be Path
-            # Use as_file to get a temporary file if needed, but we want a persistent Path
-            # If the Traversable is already a file on disk, str() will give path
-            maybe_path = Path(str(resource))
-            if maybe_path.exists():
-                return maybe_path
-        except Exception:
-            pass
-
-        # If not on disk (e.g., zip), extract to a temp file? But we want a Path that can be read.
-        # We can use as_file to provide a context-managed path; however the caller expects a persistent Path.
-        # For test usage, we can read via resource.read_text() and write to a temp Path?
-        # Simpler: if resource is Traversable, read its text and materialize to a deterministic temp location?
-        # Instead, we can just read via resource.read_text() and return candidate path that we just checked?
-        # If candidate didn't exist but resource exists as Traversable, we can try to read it
-        if hasattr(resource, "read_text"):
-            # It exists as Traversable; we need to provide a file path that persists
-            # We can materialize by reading and writing to a temp file? But better to just return candidate
-            # and let the caller use importlib.resources directly? For now, try to use as_file
-            try:
-                # Use as_file to get a real file path (temporary extraction for zip)
-                # The context should be kept open? But we return Path that will be valid only within context.
-                # Instead, we can copy to a stable temp directory
-                with as_file(resource) as file_path:  # type: ignore[arg-type]
-                    # Copy to a deterministic location under /tmp for this process?
-                    # For simplicity, just return the file_path (it will be valid after context for zip? Not guaranteed)
-                    # For real filesystem, as_file just yields the same path
-                    return Path(file_path)
-            except Exception:
-                pass
-        # If all else, raise
-        raise FileNotFoundError(f"resource {name!r} not found")
-    except Exception as exc:
-        # If importlib.resources fails, fallback to candidate existence check already done
-        if candidate.exists():
-            return candidate
+    resource = files("loopkeeper").joinpath(_RESOURCE_ROOT, *parts)
+    try:
+        return resource.read_bytes()
+    except FileNotFoundError:
+        raise
+    except (OSError, ModuleNotFoundError) as exc:
         raise FileNotFoundError(f"resource {name!r} not found: {exc}") from exc
+
+
+def read_resource_text(name: str) -> str:
+    """Return a packaged resource decoded as UTF-8.
+
+    See :func:`read_resource_bytes` for the name contract.
+    """
+    raw = read_resource_bytes(name)
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"resource {name!r} is not valid UTF-8: {exc}") from exc

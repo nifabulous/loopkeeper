@@ -34,11 +34,10 @@ def _sanitize_free_text(text: str) -> str:
     """Sanitize prose/free-text fields without touching trailer identity fields."""
 
     sanitized = sanitize(text)
-    # Defense-in-depth for short test/provider secrets that are below the
-    # generic corpus thresholds.  This is deliberately applied only to prose
-    # and free-text trailer fields, never to file/category/finding identifiers.
-    sanitized = _SHORT_SECRET_RE.sub("[SECRET]", sanitized)
-    return sanitized.replace("sk-live-value", "[SECRET]")
+    # Defense-in-depth for short provider tokens that fall below the generic
+    # corpus thresholds.  Applied only to prose and free-text trailer fields,
+    # never to file/category/finding identifiers.
+    return _SHORT_SECRET_RE.sub("[SECRET]", sanitized)
 
 
 def _sanitize_trailer(trailer: Trailer) -> Trailer:
