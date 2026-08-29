@@ -85,7 +85,8 @@ LOOPKEEPER_BOT_LOGIN="${LOOPKEEPER_BOT_LOGIN:-github-actions[bot]}"
 : "${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES:=1000}"
 : "${LOOPKEEPER_CONTEXT_MAX_FILES:=10}"
 : "${LOOPKEEPER_CONTEXT_MAX_BYTES:=50000}"
-: "${LOOPKEEPER_MAX_OUTPUT_BYTES:=50000}"
+# LOOPKEEPER_MAX_OUTPUT_BYTES is already required above with :?; a default here
+# would be unreachable.
 : "${LOOPKEEPER_OPERATOR:=0}"
 : "${LOOPKEEPER_GAP_LABEL:=}"
 
@@ -245,10 +246,10 @@ else
   CONTRACT_PATH="$LOOPKEEPER_CONTRACT_PATH"
 fi
 MARKER="<!-- loopkeeper-pr-review:${PR_NUMBER}:${HEAD_SHA} -->"
-# Evidence state marker: fallback (direct) vs ci (workflow_run with exact-head CI evidence)
-# A direct-event fallback may run before CI run exists; this marker tells later workflow_run that eligible for replacement once CI evidence exists.
-EVIDENCE_FALLBACK_MARKER="<!-- loopkeeper-evidence:fallback -->"
-EVIDENCE_CI_MARKER="<!-- loopkeeper-evidence:ci -->"
+# Evidence state: "fallback" for a direct event that ran before any CI run
+# existed, "ci" for a validated workflow_run carrying exact-head CI evidence.
+# The marker text itself is written by comment_state.serialize_evidence_marker
+# and matched below when the writer re-reads canonical comments.
 
 # Bounded comment collection: paginate through configured cap instead of unbounded --paginate
 collect_bounded_comments() {
@@ -297,23 +298,12 @@ else
   BOUNDED_READ_FAILED=0
 fi
 
-REPLACE_COMMENT_ID=""
 EVIDENCE_STATE="fallback"
 if [[ "${LOOPKEEPER_EVENT_NAME:-}" == "workflow_run" && "$BOUNDED_READ_FAILED" == "0" ]]; then
-  # Find existing fallback marker for this head that can be replaced with CI evidence
-  REPLACE_COMMENT_ID="$(jq -s -r --arg bot "$LOOPKEEPER_BOT_LOGIN" --arg marker "$MARKER" \
-    --arg fallback "$EVIDENCE_FALLBACK_MARKER" \
-    '[.[] | select(.login == $bot and (.body | contains($marker)))] as $matches
-     | if ($matches | length) == 0 then ""
-       else (($matches | map(select(.body | contains($fallback)))
-              | if length > 0 then .[-1] else $matches[-1] end).id // "")
-       end' \
-    "$TEMP_DIR/comments.jsonl")"
-  if [[ -n "$REPLACE_COMMENT_ID" && "$REPLACE_COMMENT_ID" != "0" ]]; then
-    EVIDENCE_STATE="ci"
-  else
-    EVIDENCE_STATE="ci"
-  fi
+  # A validated workflow_run carries exact-head CI evidence. Which existing
+  # comment gets replaced is decided later by the pure state machine in
+  # comment_state, from the re-read comment history, so no scan is needed here.
+  EVIDENCE_STATE="ci"
 fi
 if [[ "${LOOPKEEPER_EVENT_NAME:-}" != "workflow_run" && "$BOUNDED_READ_FAILED" == "0" ]]; then
   if jq -e -n --arg bot "$LOOPKEEPER_BOT_LOGIN" --arg marker "$MARKER" \
@@ -859,19 +849,23 @@ if [[ "$LATEST_STATE" != "OPEN" || "$LATEST_SHA" != "$HEAD_SHA" ]]; then
 fi
 
 # Render comment with bounded writer (uses the packaged comment state module).
-python3 - <<PY
-import os, sys
+# The trusted Loopkeeper src reaches this block through PYTHONPATH, which the
+# reusable workflows set to the immutable Loopkeeper checkout. The consumer
+# checkout is never placed on sys.path: a reviewed repository containing a
+# top-level "loopkeeper" package would otherwise shadow the trusted module
+# inside the job that holds pull-requests: write.
+python3 - "$PR_NUMBER" "$HEAD_SHA" "$EVIDENCE_STATE" "$TEMP_DIR" "$LOOPKEEPER_MAX_OUTPUT_BYTES" <<'PY'
+import sys
 from pathlib import Path
-sys.path.insert(0, str(Path("$REPO_ROOT").resolve()))
+
 from loopkeeper.adapters.github.comment_state import render_comment, serialize_pr_marker
-pr = int("$PR_NUMBER")
-head = "$HEAD_SHA"
-evidence = "$EVIDENCE_STATE"
-marker = serialize_pr_marker(pr, head)
-model_text = open("$TEMP_DIR/review.md", encoding="utf-8").read()
-max_bytes = int(os.environ.get("LOOPKEEPER_MAX_OUTPUT_BYTES", "50000"))
-rendered = render_comment(model_text, marker, evidence, max_bytes)
-open("$TEMP_DIR/comment.md", "w", encoding="utf-8").write(rendered)
+
+pr_number, head_sha, evidence_state, temp_dir_raw, max_bytes_raw = sys.argv[1:]
+temp_dir = Path(temp_dir_raw)
+marker = serialize_pr_marker(int(pr_number), head_sha)
+model_text = (temp_dir / "review.md").read_text(encoding="utf-8")
+rendered = render_comment(model_text, marker, evidence_state, int(max_bytes_raw))
+(temp_dir / "comment.md").write_text(rendered, encoding="utf-8")
 PY
 
 save_review_artifacts() {
@@ -880,25 +874,49 @@ save_review_artifacts() {
     cp "$TEMP_DIR/review.md" "$LOOPKEEPER_ARTIFACT_DIR/review.md"
     cp "$TEMP_DIR/comment.md" "$LOOPKEEPER_ARTIFACT_DIR/comment.md"
     cp "$TEMP_DIR/trailer.json" "$LOOPKEEPER_ARTIFACT_DIR/trailer.json"
-    python3 - "$LOOPKEEPER_ARTIFACT_DIR/review-metadata.json" <<PY
+    python3 - \
+      "$LOOPKEEPER_ARTIFACT_DIR/review-metadata.json" \
+      "$PR_NUMBER" \
+      "$HEAD_SHA" \
+      "${LOOPKEEPER_EVENT_NAME:-unknown}" \
+      "$EVIDENCE_STATE" \
+      "$TEMP_DIR/trailer.json" \
+      "$PR_FILES_TRUNCATED" \
+      "$PR_FILES_PATCH_TRUNCATED" \
+      "$PR_FILES_RETURNED" <<'PY'
 import json
+import sys
 from pathlib import Path
 
+(
+    destination,
+    pr_number,
+    head_sha,
+    event_name,
+    evidence_state,
+    trailer_path,
+    files_truncated,
+    patch_truncated,
+    files_returned,
+) = sys.argv[1:]
+
+patch_truncated_count = int(patch_truncated)
+files_page_truncated = files_truncated == "1"
 payload = {
     "schema": 1,
-    "pr_number": int("$PR_NUMBER"),
-    "head_sha": "$HEAD_SHA",
-    "event_name": "${LOOPKEEPER_EVENT_NAME:-unknown}",
-    "evidence_state": "$EVIDENCE_STATE",
-    "trailer_validation": json.loads(Path("$TEMP_DIR/trailer.json").read_text(encoding="utf-8")),
+    "pr_number": int(pr_number),
+    "head_sha": head_sha,
+    "event_name": event_name,
+    "evidence_state": evidence_state,
+    "trailer_validation": json.loads(Path(trailer_path).read_text(encoding="utf-8")),
     "coverage": {
-        "state": "partial" if "$PR_FILES_TRUNCATED" == "1" or int("$PR_FILES_PATCH_TRUNCATED") > 0 else "complete",
-        "files_returned": int("$PR_FILES_RETURNED"),
-        "files_with_truncated_patch": int("$PR_FILES_PATCH_TRUNCATED"),
-        "files_page_truncated": "$PR_FILES_TRUNCATED" == "1",
+        "state": "partial" if files_page_truncated or patch_truncated_count > 0 else "complete",
+        "files_returned": int(files_returned),
+        "files_with_truncated_patch": patch_truncated_count,
+        "files_page_truncated": files_page_truncated,
     },
 }
-Path("$LOOPKEEPER_ARTIFACT_DIR/review-metadata.json").write_text(
+Path(destination).write_text(
     json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8"
 )
 PY
@@ -909,17 +927,19 @@ record_write_action() {
   local action="$1"
   if [[ -n "${LOOPKEEPER_ARTIFACT_DIR:-}" ]]; then
     mkdir -p "$LOOPKEEPER_ARTIFACT_DIR"
-    python3 - "$LOOPKEEPER_ARTIFACT_DIR/write-metadata.json" <<PY
+    python3 - "$LOOPKEEPER_ARTIFACT_DIR/write-metadata.json" "$PR_NUMBER" "$HEAD_SHA" "$action" <<'PY'
 import json
+import sys
 from pathlib import Path
 
+destination, pr_number, head_sha, action = sys.argv[1:]
 payload = {
     "schema": 1,
-    "pr_number": int("$PR_NUMBER"),
-    "head_sha": "$HEAD_SHA",
-    "action": "$action",
+    "pr_number": int(pr_number),
+    "head_sha": head_sha,
+    "action": action,
 }
-Path("$LOOPKEEPER_ARTIFACT_DIR/write-metadata.json").write_text(
+Path(destination).write_text(
     json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8"
 )
 PY
@@ -966,9 +986,13 @@ CANONICAL_JSON="$(jq -s --arg bot "$LOOPKEEPER_BOT_LOGIN" --arg marker "$MARKER"
 CANONICAL_COUNT="$(jq 'length' <<<"$CANONICAL_JSON")"
 
 if (( CANONICAL_COUNT == 0 )); then
-  create_review_comment
+  # Capture the write result before recording metadata, then return the write
+  # result. "exit $?" here would report whether the metadata file was written,
+  # not whether the comment was actually created.
+  write_status=0
+  create_review_comment || write_status=$?
   record_write_action "created"
-  exit $?
+  exit "$write_status"
 fi
 
 CANONICAL_ID="$(jq -r '.[0].id' <<<"$CANONICAL_JSON")"
