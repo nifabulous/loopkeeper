@@ -8,8 +8,8 @@ No slot names a versioned model id anywhere a test can't see one (`tests/unit/te
 
 | Slot | Default | Binding point | Notes |
 |---|---|---|---|
-| PR reviewer | `gpt-5.3-codex` | `LOOPKEEPER_MODEL` (fallback) | Also `LOOPKEEPER_REASONING_EFFORT`, `LOOPKEEPER_API_STYLE`, `LOOPKEEPER_API_BASE_URL`, byte/token budgets, timeouts |
-| Issue triage | `gpt-5.3-codex` | `LOOPKEEPER_MODEL` (fallback) | Same shape as the reviewer |
+| PR reviewer | `gpt-5.6-luna` | `LOOPKEEPER_MODEL` (fallback) | Also `LOOPKEEPER_REASONING_EFFORT`, `LOOPKEEPER_API_STYLE`, `LOOPKEEPER_API_BASE_URL`, byte/token budgets, timeouts |
+| Issue triage | `gpt-5.6-luna` | `LOOPKEEPER_MODEL` (fallback) | Same shape as the reviewer |
 
 Both slots call through `src/loopkeeper/transport.py`, whose endpoint and wire format are themselves bound, not hardcoded:
 

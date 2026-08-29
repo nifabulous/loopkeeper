@@ -250,3 +250,30 @@ def test_workflow_identity_fails_closed_without_unique_active_path():
         except WorkflowLookupError:
             continue
         raise AssertionError(f"expected lookup failure for {payload}")
+
+
+def test_every_workflow_shares_one_valid_default_model():
+    """The fallback model id is duplicated per workflow; keep it consistent.
+
+    Six hardcoded copies of the same string drift silently. Assert they agree
+    and that the value passes the package's own model-shape validation, so a
+    default can never be set to a shape resolve_model would reject at runtime.
+    """
+    import re
+
+    from loopkeeper.model_binding import _validate_model_shape
+
+    pattern = re.compile(r"vars\.LOOPKEEPER_MODEL \|\| '([^']+)'")
+    defaults: dict[str, set[str]] = {}
+    for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        found = set(pattern.findall(path.read_text(encoding="utf-8")))
+        if found:
+            defaults[path.name] = found
+
+    assert defaults, "no workflow declares a fallback model"
+
+    values = set().union(*defaults.values())
+    assert len(values) == 1, f"workflows disagree on the default model: {defaults}"
+
+    # Must be bindable: a default that resolve_model rejects fails every run.
+    _validate_model_shape(next(iter(values)), "workflow default")
