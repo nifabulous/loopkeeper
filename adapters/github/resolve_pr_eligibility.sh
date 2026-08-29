@@ -154,8 +154,16 @@ while (( page <= LOOPKEEPER_ELIGIBILITY_MAX_PAGES )); do
   page_file="$TEMP_DIR/timeline-${page}.json"
   fetch_bounded_json "label timeline page ${page}" "$page_file" \
     "repos/${GH_REPO}/issues/${PR_NUMBER}/timeline?per_page=${LOOPKEEPER_ELIGIBILITY_PAGE_SIZE}&page=${page}"
-  if ! jq -e 'type == "array"' "$page_file" >/dev/null 2>&1; then
-    echo "label timeline page ${page} was not an array; refusing to decide eligibility." >&2
+  # Shape before interpretation. `jq -r` renders a non-string as text, so an
+  # unvalidated numeric or object field would flow on as a plausible value
+  # instead of being recognised as malformed evidence.
+  if ! jq -e 'type == "array"
+              and all(.[]; type == "object" and (.event | type == "string"))
+              and all(.[] | select(.event == "labeled" or .event == "unlabeled");
+                      (.label.name | type == "string")
+                      and (.actor.login | type == "string"))' \
+    "$page_file" >/dev/null 2>&1; then
+    echo "label timeline page ${page} did not match the expected shape; refusing to decide eligibility." >&2
     exit 4
   fi
   count="$(jq 'length' "$page_file")"
@@ -187,9 +195,18 @@ fi
 fetch_bounded_json "collaborator permission" "$TEMP_DIR/permission.json" \
   "repos/${GH_REPO}/collaborators/${APPROVER}/permission"
 
-ROLE_NAME="$(jq -r '.role_name // empty' "$TEMP_DIR/permission.json")"
+# role_name must be a STRING. `jq -r` renders 42, [], {...}, or true as text,
+# so checking only for emptiness would pass a malformed value to the decision
+# and yield a confident `unauthorized-actor` from evidence that was never
+# readable. An object even renders multi-line, which would corrupt parsing
+# downstream.
+if ! jq -e '.role_name | type == "string"' "$TEMP_DIR/permission.json" >/dev/null 2>&1; then
+  echo "collaborator permission response carried no string role_name; refusing to fall back to the legacy permission field." >&2
+  exit 4
+fi
+ROLE_NAME="$(jq -r '.role_name' "$TEMP_DIR/permission.json")"
 if [[ -z "$ROLE_NAME" ]]; then
-  echo "collaborator permission response carried no role_name; refusing to fall back to the legacy permission field." >&2
+  echo "collaborator permission response carried an empty role_name; refusing to decide eligibility." >&2
   exit 4
 fi
 

@@ -446,3 +446,84 @@ def test_an_empty_but_well_formed_label_list_is_still_a_real_answer(tmp_path):
     assert result.returncode == 0, result.stderr
     assert _outputs(tmp_path).get("eligible") == "false"
     assert _outputs(tmp_path).get("reason") == "unapproved-fork"
+
+
+# ---------------------------------------------------------------------------
+# Non-string forge fields (review finding: malformed-permission-role)
+#
+# `jq -r` renders 42, [], {...} and true as text, so a check for emptiness
+# alone lets a malformed value reach the decision and produce a confident
+# `unauthorized-actor` from evidence that was never readable. This is the same
+# class as the `.labels` finding, on the other two endpoints.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "role_value",
+    [42, [], {"a": 1}, True, ["maintain"], {"role_name": "maintain"}],
+    ids=["number", "empty-array", "object", "boolean", "array-of-string", "nested"],
+)
+def test_non_string_role_name_is_unverifiable(tmp_path, role_value):
+    result, _ = _run(
+        tmp_path,
+        pr=_pr_fixture(labels=[APPROVAL_LABEL]),
+        timeline=_timeline([("labeled", APPROVAL_LABEL, "trusted-maintainer")]),
+        permission={"permission": "admin", "role_name": role_value},
+    )
+
+    assert result.returncode == EXIT_TRUST, (
+        f"role_name={role_value!r} produced a confident decision: {result.stdout}"
+    )
+    assert _outputs(tmp_path).get("reason") not in ("unauthorized-actor", "authorized-fork")
+
+
+def test_empty_string_role_name_is_unverifiable(tmp_path):
+    result, _ = _run(
+        tmp_path,
+        pr=_pr_fixture(labels=[APPROVAL_LABEL]),
+        timeline=_timeline([("labeled", APPROVAL_LABEL, "trusted-maintainer")]),
+        permission={"role_name": ""},
+    )
+
+    assert result.returncode == EXIT_TRUST
+
+
+@pytest.mark.parametrize(
+    "timeline",
+    [
+        [{"event": "labeled", "label": {"name": 123}, "actor": {"login": "m"}}],
+        [{"event": "labeled", "label": {"name": "loopkeeper-approved"}, "actor": {"login": 456}}],
+        [{"event": 99, "label": {"name": "x"}, "actor": {"login": "m"}}],
+        ["not-an-object"],
+        [{"event": "labeled", "actor": {"login": "m"}}],
+    ],
+    ids=["label-number", "actor-number", "event-number", "entry-string", "label-missing"],
+)
+def test_malformed_timeline_entries_are_unverifiable(tmp_path, timeline):
+    result, _ = _run(
+        tmp_path,
+        pr=_pr_fixture(labels=[APPROVAL_LABEL]),
+        timeline=timeline,
+        permission={"role_name": "maintain"},
+    )
+
+    assert result.returncode == EXIT_TRUST, result.stdout
+    assert _outputs(tmp_path).get("eligible") != "true"
+
+
+def test_unrelated_timeline_events_without_labels_are_still_accepted(tmp_path):
+    """Only labeled/unlabeled entries carry label and actor; others must pass."""
+    timeline = [
+        {"event": "commented", "actor": {"login": "someone"}},
+        {"event": "committed"},
+        {"event": "labeled", "label": {"name": APPROVAL_LABEL}, "actor": {"login": "maint"}},
+    ]
+    result, _ = _run(
+        tmp_path,
+        pr=_pr_fixture(labels=[APPROVAL_LABEL]),
+        timeline=timeline,
+        permission={"role_name": "maintain"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert _outputs(tmp_path).get("eligible") == "true"
