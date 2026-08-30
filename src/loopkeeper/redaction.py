@@ -15,17 +15,18 @@ rather than a payment message.  Redaction that fires on a byte size or a hash
 is not merely noisy: it hands the model corrupted evidence, which the model
 then reports as a defect in the code under review.
 
-Two responses to that are available, and only one is safe.  Narrowing a rule
--- requiring a cue term near an account number, or a valid Luhn check digit on
-a card -- reads better on source and opens a hole in untrusted content, where
-the attacker chooses the context.  Both were tried and reverted; see the
-comments at ``_ACCOUNT_RE`` and ``_redact_card``.  Declaring what was removed
-costs nothing, so ``sanitize_with_metadata`` reports the placeholders this core
-substituted and the prompt explains what a placeholder is.
+The fix for that is to *declare* the substitution, not to make fewer of them.
+``sanitize_with_metadata`` reports the placeholders this core introduced and the
+prompt explains what a placeholder is, so an over-broad match costs the reviewer
+a value it can no longer read -- never a finding it wrongly raises.
 
-The one narrowing kept is exact rather than heuristic: no payment rule looks
-inside a hexadecimal digest, whose alphabet and length are fixed by the hash
-function and never describe a payment identifier.
+Do not narrow a rule here to reduce false positives.  Three attempts, three
+bypasses, each defeated by input the attacker writes: a cue term near an account
+number is a cue the attacker omits; a Luhn check on a card admits
+"1234 5678 9012 3456"; and exempting hexadecimal digests admits any card wrapped
+in thirty-two characters of hex padding.  The shape a rule exempts is a shape the
+attacker can produce.  Each attempt is recorded at the rule it would be
+reintroduced on.
 """
 
 from __future__ import annotations
@@ -154,33 +155,6 @@ _BIC_RE = re.compile(r"\b[A-Za-z]{4}[A-Za-z]{2}[A-Za-z0-9]{2}(?:[A-Za-z0-9]{3})?
 _BIC_CUE_RE = re.compile(r"(?:\bbic|\bswift\s+(?:code|codes|address|bic))\s*$", re.IGNORECASE)
 _ENGLISH_INFLECTION_SUFFIXES = ("ES", "ED", "ING", "LY", "ION", "MENT", "NESS")
 
-_HEX_CHARACTERS = frozenset("0123456789abcdefABCDEF")
-_HEX_LETTERS = frozenset("abcdefABCDEF")
-# Digest lengths start at 32 hex characters (MD5). Anything shorter is left to
-# the payment rules, so a card number never qualifies on length alone.
-_MIN_DIGEST_HEX_CHARACTERS = 32
-
-
-def _within_hex_digest(match: re.Match[str]) -> bool:
-    """True when ``match`` lies inside a hexadecimal digest.
-
-    A digit run inside a hash is an artefact of the encoding, not a payment
-    identifier: the alphabet and the length are fixed by the hash function.
-    Expanding the match to its surrounding hex run and testing that run is
-    exact, so a delimited card number can never be mistaken for a digest.
-    """
-    text = match.string
-    start, end = match.start(), match.end()
-    while start > 0 and text[start - 1] in _HEX_CHARACTERS:
-        start -= 1
-    while end < len(text) and text[end] in _HEX_CHARACTERS:
-        end += 1
-    token = text[start:end]
-    if len(token) < _MIN_DIGEST_HEX_CHARACTERS:
-        return False
-    # A run of that length with no hex letter is decimal, not a digest.
-    return any(character in _HEX_LETTERS for character in token)
-
 
 def _looks_like_bic(token: str, prefix: str) -> bool:
     token = token.upper()
@@ -212,12 +186,6 @@ def _redact_bic(match: re.Match[str]) -> str:
     return token
 
 
-def _redact_account(match: re.Match[str]) -> str:
-    if _within_hex_digest(match):
-        return match.group(0)
-    return "[ACCOUNT]"
-
-
 def _apply_rules(value: str, *, include_bic: bool) -> str:
     value = _TUTOR_SECRET_RE.sub("[SECRET]", value)
     value = _EMAIL_RE.sub("[EMAIL]", value)
@@ -226,7 +194,7 @@ def _apply_rules(value: str, *, include_bic: bool) -> str:
     if include_bic:
         value = _BIC_RE.sub(_redact_bic, value)
     value = _PHONE_RE.sub(_redact_phone, value)
-    value = _ACCOUNT_RE.sub(_redact_account, value)
+    value = _ACCOUNT_RE.sub("[ACCOUNT]", value)
     return value
 
 
@@ -322,17 +290,15 @@ _EXEMPT_RULES = (
 
 
 def _redact_card(match: re.Match[str]) -> str:
-    # A Luhn check would name real cards precisely, but this rule is not only a
-    # card detector: it is the only thing standing between a grouped 13-19
-    # digit identifier and the model. Requiring a valid check digit lets
-    # "1234 5678 9012 3456" through, so length stays the test.
-    token = match.group(0)
-    if _within_hex_digest(match):
-        return token
-    digits = sum(character.isdigit() for character in token)
+    # Length is the whole test, deliberately. Every refinement tried here has
+    # opened a bypass, because the input is attacker-controlled and any shape
+    # this rule exempts is a shape the attacker can produce: a Luhn check lets
+    # "1234 5678 9012 3456" through, and exempting hex-looking tokens lets a
+    # card through inside 32 characters of padding.
+    digits = sum(character.isdigit() for character in match.group(0))
     if 13 <= digits <= 19:
         return "[REDACTED_CARD]"
-    return token
+    return match.group(0)
 
 
 def _sanitize_exempt_literal(literal: str) -> str:
