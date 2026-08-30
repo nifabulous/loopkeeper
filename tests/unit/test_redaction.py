@@ -524,6 +524,33 @@ def test_the_generic_core_declares_the_placeholders_it_substituted():
     assert result.placeholders == ("ACCOUNT",)
 
 
+def test_supplied_placeholder_text_is_not_declared_as_redacted():
+    """The input is attacker-controlled, so presence cannot imply substitution.
+
+    Declaring a placeholder the author merely typed would let them silence
+    findings about their own literal, because the prompt tells the reviewer not
+    to raise a finding whose subject is a placeholder.
+    """
+    result = sanitize_with_metadata("cfg = \"[ACCOUNT]\"\n")
+
+    assert result.text == "cfg = \"[ACCOUNT]\"\n"
+    assert result.placeholders == ()
+
+
+def test_a_real_substitution_is_declared_even_beside_supplied_placeholder_text():
+    """Counting, not membership: a supplied copy must not mask a real one."""
+    result = sanitize_with_metadata("cfg = \"[ACCOUNT]\"\nsize = 12345678\n")
+
+    assert result.text == "cfg = \"[ACCOUNT]\"\nsize = [ACCOUNT]\n"
+    assert result.placeholders == ("ACCOUNT",)
+
+
+def test_supplied_placeholder_text_does_not_mask_a_different_substitution():
+    result = sanitize_with_metadata("note = \"[ACCOUNT]\" ada@example.com\n")
+
+    assert result.placeholders == ("EMAIL",)
+
+
 def test_declared_placeholders_follow_the_placeholder_grammar():
     result = sanitize_with_metadata(
         "account 100200300400, ada@example.com, card 4111 1111 1111 1111\n"

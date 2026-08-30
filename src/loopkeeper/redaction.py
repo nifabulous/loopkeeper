@@ -400,15 +400,26 @@ GENERIC_PLACEHOLDERS: tuple[str, ...] = (
 )
 
 
-def _observed_placeholders(text: str) -> tuple[str, ...]:
-    """Return the generic placeholders present in ``text``, in vocabulary order.
+def _introduced_placeholders(before: str, after: str) -> tuple[str, ...]:
+    """Placeholders this sanitizer *added*, in vocabulary order.
 
-    Detection is by presence in the output rather than by instrumenting each
-    substitution, so a placeholder the untrusted input already contained is
-    also reported. That direction is harmless: it adds a name to an
-    explanatory line and never suppresses a redaction.
+    Presence in the output is not the test. The input is attacker-controlled,
+    so a pull request that simply contains the literal text ``[ACCOUNT]`` would
+    be reported as having had an account redacted. That is not a harmless
+    over-report: the prompt tells the reviewer not to raise a finding whose
+    subject is a placeholder, which would hand the author of the reviewed code
+    a way to silence findings about their own literal.
+
+    Counting instead of testing membership closes it. A placeholder is declared
+    only when the sanitized text holds more of it than the input did, so
+    supplied copies never qualify on their own and a real substitution
+    alongside them still does.
     """
-    return tuple(name for name in GENERIC_PLACEHOLDERS if f"[{name}]" in text)
+    return tuple(
+        name
+        for name in GENERIC_PLACEHOLDERS
+        if after.count(f"[{name}]") > before.count(f"[{name}]")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -421,15 +432,17 @@ def sanitize_with_metadata(text: str, redactor: Redactor | None = None) -> Redac
         raise TypeError("text must be str")
     generic = _generic_redact(text)
     if redactor is None:
-        return RedactionResult(generic, _observed_placeholders(generic))
+        return RedactionResult(generic, _introduced_placeholders(text, generic))
     result = redactor.redact(generic)
     _validate_result(result)
     final_text = _generic_redact(result.text)
     # Merge the plugin's declared placeholders with the core's own. Reporting
     # only the plugin's left the core's substitutions undeclared whenever a
     # plugin was configured, and undeclared entirely when one was not.
+    # The comparison runs against the original input, so a placeholder the
+    # input already carried is not attributed to either pass.
     normalized = _normalize_placeholders(
-        tuple(result.placeholders) + _observed_placeholders(final_text)
+        tuple(result.placeholders) + _introduced_placeholders(text, final_text)
     )
     if len(final_text.encode("utf-8")) > _MAX_OUTPUT_BYTES:
         raise SecurityError("sanitized output exceeds byte ceiling")
