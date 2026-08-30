@@ -91,7 +91,10 @@ if ! gh issue view "$ISSUE_NUMBER" --repo "$GH_REPO" --json number,title,body,ur
   exit 4
 fi
 if ! jq -e \
+  --argjson issue_number "$ISSUE_NUMBER" \
   'type == "object"
+   and has("number") and (.number | type == "number" and . == floor)
+   and (.number == $issue_number)
    and has("title") and (.title | type) == "string"
    and has("body") and ((.body == null) or ((.body | type) == "string"))
    and has("state") and (.state | type) == "string"' \

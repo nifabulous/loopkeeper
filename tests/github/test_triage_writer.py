@@ -35,6 +35,7 @@ def _run(
     body: str = "Stub body",
     raw_title: object | None = None,
     artifact_title: str = "Stub issue",
+    issue_number: object = int(ISSUE_NUMBER),
     state: str = "OPEN",
     metadata_padding: int = 0,
     comments_available: bool = True,
@@ -60,6 +61,7 @@ def _run(
 
     issue = json.dumps(
         {
+            "number": issue_number,
             "title": title if raw_title is None else raw_title,
             "body": body + ("x" * metadata_padding),
             "state": state,
@@ -172,6 +174,18 @@ def test_writer_refuses_malformed_comment_history(tmp_path):
 
 def test_writer_refuses_malformed_issue_title(tmp_path):
     result, calls = _run(tmp_path, title="", raw_title=False, artifact_title="")
+    assert result.returncode != 0
+    assert _writes(calls) == []
+
+
+def test_writer_refuses_metadata_for_a_different_issue(tmp_path):
+    result, calls = _run(tmp_path, issue_number=43)
+    assert result.returncode != 0
+    assert _writes(calls) == []
+
+
+def test_writer_refuses_non_integer_issue_number(tmp_path):
+    result, calls = _run(tmp_path, issue_number="42")
     assert result.returncode != 0
     assert _writes(calls) == []
 

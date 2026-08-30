@@ -157,6 +157,7 @@ def _run(
     forge_default: str = DEFAULT_BRANCH,
     issue_padding: int = 0,
     final_issue_padding: int | None = None,
+    issue_number: object = int(ISSUE_NUMBER),
     issue_title: object = "Stub issue",
     issue_body: object = "",
     issue_state: object = "OPEN",
@@ -180,6 +181,7 @@ def _run(
     _write_stub(stub_dir, "python3", _PYTHON_STUB)
 
     issue = json.loads(_issue_json(issue_padding))
+    issue["number"] = issue_number
     issue["title"] = issue_title
     issue["body"] = issue_body if issue_body != "" else issue["body"]
     issue["state"] = issue_state
@@ -289,6 +291,22 @@ def test_triage_rejects_oversized_initial_metadata(tmp_path):
 
 def test_triage_rejects_malformed_issue_title_before_model_call(tmp_path):
     result, invocations = _run(tmp_path, issue_title={"nested": "not-a-string"})
+
+    assert result.returncode == EXIT_TRUST, result.stdout
+    assert _model_calls(invocations) == []
+    assert _write_calls(invocations) == []
+
+
+def test_triage_rejects_issue_metadata_for_a_different_issue(tmp_path):
+    result, invocations = _run(tmp_path, issue_number=43)
+
+    assert result.returncode == EXIT_TRUST, result.stdout
+    assert _model_calls(invocations) == []
+    assert _write_calls(invocations) == []
+
+
+def test_triage_rejects_non_integer_issue_number_before_model_call(tmp_path):
+    result, invocations = _run(tmp_path, issue_number="42")
 
     assert result.returncode == EXIT_TRUST, result.stdout
     assert _model_calls(invocations) == []

@@ -58,14 +58,17 @@ fi
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
-if ! gh issue view "$ISSUE_NUMBER" --repo "$GH_REPO" --json title,body,state 2>/dev/null \
+if ! gh issue view "$ISSUE_NUMBER" --repo "$GH_REPO" --json number,title,body,state 2>/dev/null \
   | capture_bounded_stream "$LOOPKEEPER_CHECK_MAX_RAW_BYTES" "final issue metadata" \
     >"$TEMP_DIR/latest-metadata.json"; then
   echo "Final issue metadata was unavailable or exceeded its byte bound; refusing to write." >&2
   exit 4
 fi
 if ! jq -e \
+  --argjson issue_number "$ISSUE_NUMBER" \
   'type == "object"
+   and has("number") and (.number | type == "number" and . == floor)
+   and (.number == $issue_number)
    and has("title") and (.title | type) == "string"
    and has("body") and ((.body == null) or ((.body | type) == "string"))
    and has("state") and (.state | type) == "string"' \
