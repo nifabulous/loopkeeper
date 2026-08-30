@@ -109,6 +109,13 @@ def test_no_embedded_python_block_interpolates_a_shell_variable():
     assert offenders == [], f"shell interpolation inside Python: {offenders}"
 
 
+def test_review_script_carries_redaction_metadata_into_the_prompt():
+    source = REVIEW.read_text(encoding="utf-8")
+
+    assert source.count("--metadata-file") >= 4
+    assert "render_redaction_guidance" in source
+
+
 def test_workflow_run_ci_replaces_fallback_for_same_head():
     """Exact-head CI evidence replaces a fallback comment in place."""
     existing = [

@@ -461,3 +461,171 @@ def test_relay_adapter_placeholder_set_is_declared_and_tested():
     for ph in placeholder_set:
         assert re.fullmatch(r"[A-Z][A-Z0-9_]{0,31}", ph), f"placeholder {ph!r} violates grammar"
 
+
+
+# ---------------------------------------------------------------------------
+# Code-review evidence integrity
+#
+# The generic core reads source diffs far more often than payment messages.
+# Corrupting benign technical content is not merely noisy: the model cannot
+# distinguish a placeholder from the file's own text, so it reports the
+# corruption as a defect in the code under review. Loopkeeper #17.
+# ---------------------------------------------------------------------------
+
+
+def test_a_card_wrapped_in_hex_padding_is_still_redacted():
+    """Exempting digest-shaped tokens was a bypass, not a refinement.
+
+    Any shape a payment rule exempts is a shape the attacker can produce: a
+    card number padded to digest length with hex characters looks exactly like
+    a hash. Length stays the only test.
+    """
+    token = "abcdef" + "4111111111111111" + "abcdefabcd"
+    assert len(token) >= 32
+
+    sanitized = sanitize(f"value = {token}\n")
+
+    assert "4111111111111111" not in sanitized
+
+
+def test_grouped_card_identifiers_inside_a_hex_token_are_redacted():
+    """Separators do not rescue a grouped identifier from hex padding either.
+
+    Coverage requested by the review: contiguous, hyphen-grouped, and
+    space-grouped card-sized runs, each embedded in an attacker-controlled
+    hexadecimal-looking token.
+    """
+    for identifier in ("4111111111111111", "1234-5678-9012-3456", "1234 5678 9012 3456"):
+        token = "abcdef" + identifier + "abcdefabcd"
+
+        sanitized = sanitize(f"value = {token}\n")
+
+        assert identifier not in sanitized, identifier
+
+
+def test_a_card_at_digest_length_is_redacted():
+    """Reaching a digest's length is not provenance either."""
+    token = "a" * 24 + "4111111111111111" + "b" * 24
+    assert len(token) == 64
+
+    assert "4111111111111111" not in sanitize(f"value = {token}\n")
+
+
+def test_an_account_sized_run_inside_a_hex_token_is_redacted():
+    """Letters around a digit run are padding, not provenance.
+
+    `\\b\\d{8,}\\b` never matched inside an alphanumeric token, so an
+    account-sized run survived by being wrapped in letters -- the same evasion
+    as wrapping a card in hex.
+    """
+    token = "abcdef" + "100200300400" + "abcdefabcdefabcd"
+
+    sanitized = sanitize(f"value = {token}\n")
+
+    assert "100200300400" not in sanitized
+
+
+def test_a_digest_is_rewritten_and_the_substitution_is_declared():
+    """A real hash containing a long digit run is still redacted.
+
+    That corrupts the hash, which is why the substitution is declared: the
+    reviewer is told a value was removed rather than left to read the result
+    as a malformed checksum. Loopkeeper #17.
+    """
+    digest = "08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"
+    result = sanitize_with_metadata(f'    hash = "sha256:{digest}"\n')
+
+    assert "20572697297273" not in result.text
+    assert result.placeholders != ()
+
+
+def test_the_generic_core_declares_the_placeholders_it_substituted():
+    """Without a plugin the core still reports what it removed.
+
+    Reporting nothing is what let `size = [ACCOUNT]` reach the model with no
+    indication that the value had been removed by this harness.
+    """
+    result = sanitize_with_metadata("size = 12345678\n")
+
+    assert result.text == "size = [ACCOUNT]\n"
+    assert result.placeholders == ("ACCOUNT",)
+
+
+@pytest.mark.parametrize(
+    ("source", "placeholder"),
+    [
+        ("Authorization: Bearer abcdefghijklmnopqrstuvwxyz\n", "REDACTED"),
+        ("Cookie: session=abcdefghijklmnopqrstuvwxyz\n", "REDACTED_COOKIE"),
+    ],
+)
+def test_generic_header_placeholders_are_declared(source, placeholder):
+    result = sanitize_with_metadata(source)
+
+    assert f"[{placeholder}]" in result.text
+    assert placeholder in result.placeholders
+
+
+def test_supplied_placeholder_text_is_not_declared_as_redacted():
+    """The input is attacker-controlled, so presence cannot imply substitution.
+
+    Declaring a placeholder the author merely typed would let them silence
+    findings about their own literal, because the prompt tells the reviewer not
+    to raise a finding whose subject is a placeholder.
+    """
+    result = sanitize_with_metadata("cfg = \"[ACCOUNT]\"\n")
+
+    assert result.text == 'cfg = "[source-placeholder-literal]"\n'
+    assert result.placeholders == ()
+
+
+def test_a_real_substitution_is_declared_even_beside_supplied_placeholder_text():
+    """A source literal and a real substitution keep distinct exact shapes."""
+    result = sanitize_with_metadata("cfg = \"[ACCOUNT]\"\nsize = 12345678\n")
+
+    assert result.text == (
+        'cfg = "[source-placeholder-literal]"\n'
+        "size = [ACCOUNT]\n"
+    )
+    assert result.placeholders == ("ACCOUNT",)
+
+
+def test_supplied_placeholder_cannot_share_the_trusted_shape_of_a_substitution():
+    """Provenance is per occurrence, not merely a count for the whole input."""
+    result = sanitize_with_metadata("cfg = \"[ACCOUNT]\"\nsize = 12345678\n")
+
+    assert result.text.count("[ACCOUNT]") == 1
+    assert "[source-placeholder-literal]" in result.text
+
+
+def test_supplied_placeholder_text_does_not_mask_a_different_substitution():
+    result = sanitize_with_metadata("note = \"[ACCOUNT]\" ada@example.com\n")
+
+    assert result.placeholders == ("EMAIL",)
+
+
+def test_declared_placeholders_follow_the_placeholder_grammar():
+    result = sanitize_with_metadata(
+        "account 100200300400, ada@example.com, card 4111 1111 1111 1111\n"
+    )
+
+    import re
+
+    assert result.placeholders
+    for placeholder in result.placeholders:
+        assert re.fullmatch(r"[A-Z][A-Z0-9_]{0,31}", placeholder), placeholder
+
+
+def test_clean_source_declares_no_placeholders():
+    result = sanitize_with_metadata("def total(amount: int) -> int:\n    return amount\n")
+
+    assert result.placeholders == ()
+
+
+def test_a_grouped_identifier_is_redacted_without_a_valid_check_digit():
+    """The card rule guards grouped identifiers, not only issued cards.
+
+    A Luhn check would name real cards precisely and let this through.
+    """
+    sanitized = sanitize("Ref 1234 5678 9012 3456 here.\n")
+
+    assert "1234 5678 9012 3456" not in sanitized

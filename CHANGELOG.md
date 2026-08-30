@@ -76,6 +76,18 @@ carried for pre-release behaviour.
   job in the workflow it calls.
 - Package resources are read as content rather than as filesystem paths, which
   a zipimported install cannot provide.
+- The account rule no longer requires word boundaries. `\b\d{8,}\b` never
+  matched inside an alphanumeric token, so an identifier survived by being
+  wrapped in letters -- the same evasion as wrapping a card in hex. The rule now
+  redacts strictly more than before and never less.
+- The generic redactor declares every placeholder it substituted, and both the
+  Python CLI and GitHub adapters carry that provenance into the model prompt.
+  Previously the shell adapters discarded the metadata entirely, so a redacted
+  value reached the model with nothing to distinguish it from the file's own
+  content and was reported as a defect in the reviewed code. Placeholder-shaped
+  text supplied by the source is now visibly defanged into a separate,
+  reviewable marker, so an attacker cannot borrow the trusted shape of a real
+  substitution. Redaction strength is unchanged: no rule was relaxed.
 
 ### Known limitations
 
@@ -86,6 +98,16 @@ carried for pre-release behaviour.
   review before it is trusted.
 - When a diff exceeds the evidence budget, the review states the coverage
   limitation and must not be read as exhaustive.
+- Redaction is calibrated for payment traffic, inherited from Relay. Rules whose
+  shape is ambiguous -- any run of eight or more digits, any 13-19 digit group --
+  fire on ordinary source too, so a byte size, a row count, or part of a checksum
+  can be replaced. The prompt now states that placeholders are substitutions,
+  which stops them being read as defects, but the substitution itself remains.
+  Narrowing these rules is not an accuracy question: they are what stops an
+  identifier being smuggled through untrusted content, and three attempts at
+  narrowing each produced a bypass, because the shape a rule exempts is a shape
+  the attacker can write. Reducing the false-positive rate needs a redaction
+  profile chosen by the caller, not a cleverer pattern.
 
 <!-- Link definitions are added at publication. Until the v0.1.0 tag exists,
 a compare or release link would resolve to nothing. -->
