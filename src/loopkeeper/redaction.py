@@ -145,12 +145,18 @@ _IBAN_RE = re.compile(
     re.IGNORECASE,
 )
 _PHONE_RE = re.compile(r"\+?\(?\d[\d\s().-]{7,17}\d")
-_ACCOUNT_RE = re.compile(r"\b\d{8,}\b")
-# _ACCOUNT_RE stays deliberately unconditional. Requiring a nearby cue term
-# would read better on ordinary source, but the rule also exists to stop an
-# identifier being smuggled through untrusted content, and an attacker simply
-# omits the cue. See test_a_coordinate_attribute_cannot_smuggle_an_identifier_
-# through: the shape has to be enough on its own.
+_ACCOUNT_RE = re.compile(r"\d{8,}")
+# Unconditional, and deliberately without word boundaries.
+#
+# Requiring a nearby cue term would read better on ordinary source, but the
+# rule also stops an identifier being smuggled through untrusted content, and
+# an attacker simply omits the cue. See
+# test_a_coordinate_attribute_cannot_smuggle_an_identifier_through.
+#
+# `\b\d{8,}\b` looked equivalent and was not: there is no word boundary inside
+# an alphanumeric token, so "abcdef100200300400abcdef" passed through whole.
+# Padding a digit run with letters is the same evasion as padding it with hex,
+# and both are shapes the attacker writes.
 _BIC_RE = re.compile(r"\b[A-Za-z]{4}[A-Za-z]{2}[A-Za-z0-9]{2}(?:[A-Za-z0-9]{3})?\b")
 _BIC_CUE_RE = re.compile(r"(?:\bbic|\bswift\s+(?:code|codes|address|bic))\s*$", re.IGNORECASE)
 _ENGLISH_INFLECTION_SUFFIXES = ("ES", "ED", "ING", "LY", "ION", "MENT", "NESS")

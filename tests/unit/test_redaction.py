@@ -488,6 +488,20 @@ def test_a_card_wrapped_in_hex_padding_is_still_redacted():
     assert "4111111111111111" not in sanitized
 
 
+def test_an_account_sized_run_inside_a_hex_token_is_redacted():
+    """Letters around a digit run are padding, not provenance.
+
+    `\\b\\d{8,}\\b` never matched inside an alphanumeric token, so an
+    account-sized run survived by being wrapped in letters -- the same evasion
+    as wrapping a card in hex.
+    """
+    token = "abcdef" + "100200300400" + "abcdefabcdefabcd"
+
+    sanitized = sanitize(f"value = {token}\n")
+
+    assert "100200300400" not in sanitized
+
+
 def test_a_digest_is_rewritten_and_the_substitution_is_declared():
     """A real hash containing a long digit run is still redacted.
 
@@ -498,8 +512,8 @@ def test_a_digest_is_rewritten_and_the_substitution_is_declared():
     digest = "08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"
     result = sanitize_with_metadata(f'    hash = "sha256:{digest}"\n')
 
-    assert "[REDACTED_CARD]" in result.text
-    assert result.placeholders == ("REDACTED_CARD",)
+    assert "20572697297273" not in result.text
+    assert result.placeholders != ()
 
 
 def test_the_generic_core_declares_the_placeholders_it_substituted():

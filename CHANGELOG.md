@@ -76,6 +76,10 @@ carried for pre-release behaviour.
   job in the workflow it calls.
 - Package resources are read as content rather than as filesystem paths, which
   a zipimported install cannot provide.
+- The account rule no longer requires word boundaries. `\b\d{8,}\b` never
+  matched inside an alphanumeric token, so an identifier survived by being
+  wrapped in letters -- the same evasion as wrapping a card in hex. The rule now
+  redacts strictly more than before and never less.
 - The generic redactor declares the placeholders it substituted, and the prompt
   states what a placeholder means. Previously the core reported placeholders
   only when a plugin redactor was configured -- which the GitHub adapters never
