@@ -243,6 +243,8 @@ jobs:
           LOOPKEEPER_TRUSTED_SHA: ${{ needs.resolve.outputs.consumer_trusted_sha }}
           LOOPKEEPER_DEFAULT_BRANCH: ${{ needs.resolve.outputs.consumer_default_branch }}
           LOOPKEEPER_MODEL: ${{ vars.LOOPKEEPER_MODEL || 'gpt-5.6-luna' }}
+          LOOPKEEPER_API_STYLE: ${{ vars.LOOPKEEPER_API_STYLE || 'responses' }}
+          LOOPKEEPER_API_BASE_URL: ${{ vars.LOOPKEEPER_API_BASE_URL || '' }}
           LOOPKEEPER_REASONING_EFFORT: ${{ vars.LOOPKEEPER_REASONING_EFFORT || 'medium' }}
           LOOPKEEPER_MAX_INPUT_BYTES: ${{ vars.LOOPKEEPER_MAX_INPUT_BYTES || '600000' }}
           # Operator overrides for diff evidence. Empty means derive the
@@ -314,80 +316,3 @@ jobs:
           path: ${{ github.workspace }}/loopkeeper-artifacts
           if-no-files-found: ignore
           retention-days: 7
-
-  writer:
-    # This read-only entry point intentionally never creates a writer job.
-    # GitHub requires a non-constant expression for reusable-job conditions;
-    # run IDs are always positive, so this remains permanently disabled.
-    if: ${{ inputs.post_comments && github.run_id == 0 }}
-    needs: [resolve, review]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    concurrency:
-      group: loopkeeper-pr-review-writer-${{ inputs.consumer_repo }}-${{ inputs.pr_number || github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.run_id }}
-      cancel-in-progress: false
-    steps:
-      - name: Check out consumer at forge-verified default-branch SHA
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ inputs.consumer_repo }}
-          ref: ${{ needs.resolve.outputs.consumer_trusted_sha }}
-          path: consumer
-          fetch-depth: 1
-      - name: Check out Loopkeeper at immutable release SHA
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0
-        with:
-          repository: ${{ inputs.loopkeeper_repo }}
-          ref: ${{ inputs.loopkeeper_sha }}
-          path: loopkeeper
-          fetch-depth: 1
-      - name: Verify both writer checkouts before trusted reads
-        env:
-          CONSUMER_TRUSTED_SHA: ${{ needs.resolve.outputs.consumer_trusted_sha }}
-          LOOPKEEPER_SHA: ${{ inputs.loopkeeper_sha }}
-        run: |
-          set -euo pipefail
-          [[ "$(git -C consumer rev-parse HEAD)" == "$CONSUMER_TRUSTED_SHA" ]]
-          [[ "$(git -C loopkeeper rev-parse HEAD)" == "$LOOPKEEPER_SHA" ]]
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-      - name: Download immutable review artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: loopkeeper-review-${{ github.run_id }}
-          path: ${{ github.workspace }}/loopkeeper-review-artifact
-      - name: Run explicitly enabled writer
-        working-directory: consumer
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ inputs.consumer_repo }}
-          LOOPKEEPER_ROOT: ${{ github.workspace }}/loopkeeper
-          PYTHONPATH: ${{ github.workspace }}/loopkeeper/src
-          LOOPKEEPER_REVIEW_ARTIFACT: ${{ github.workspace }}/loopkeeper-review-artifact/review.md
-          LOOPKEEPER_REVIEW_ENABLED: "true"
-          LOOPKEEPER_TRUSTED_SHA: ${{ needs.resolve.outputs.consumer_trusted_sha }}
-          LOOPKEEPER_DEFAULT_BRANCH: ${{ needs.resolve.outputs.consumer_default_branch }}
-          LOOPKEEPER_MODEL: ${{ vars.LOOPKEEPER_MODEL || 'gpt-5.6-luna' }}
-          LOOPKEEPER_REASONING_EFFORT: ${{ vars.LOOPKEEPER_REASONING_EFFORT || 'medium' }}
-          LOOPKEEPER_MAX_INPUT_BYTES: ${{ vars.LOOPKEEPER_MAX_INPUT_BYTES || '600000' }}
-          # Operator overrides for diff evidence. Empty means derive the
-          # per-file cap from the input budget and the changed-file count.
-          LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES: ${{ vars.LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES || '' }}
-          LOOPKEEPER_PR_FILE_BUDGET_PERCENT: ${{ vars.LOOPKEEPER_PR_FILE_BUDGET_PERCENT || '50' }}
-          LOOPKEEPER_MAX_OUTPUT_TOKENS: ${{ vars.LOOPKEEPER_MAX_OUTPUT_TOKENS || '32000' }}
-          LOOPKEEPER_MAX_OUTPUT_BYTES: ${{ vars.LOOPKEEPER_MAX_OUTPUT_BYTES || '50000' }}
-          LOOPKEEPER_REQUEST_TIMEOUT: ${{ vars.LOOPKEEPER_REQUEST_TIMEOUT || '900' }}
-          LOOPKEEPER_JOB_TIMEOUT_SECONDS: ${{ inputs.job_timeout_seconds }}
-          LOOPKEEPER_EVENT_NAME: ${{ github.event_name }}
-          LOOPKEEPER_PR_ACTION: ${{ github.event.action }}
-          LOOPKEEPER_EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha || github.event.workflow_run.head_sha || '' }}
-          LOOPKEEPER_CI_WORKFLOW_NAME: ${{ inputs.ci_workflow_name }}
-          LOOPKEEPER_CI_WORKFLOW_FILE: ${{ inputs.ci_workflow_file }}
-          LOOPKEEPER_OPERATOR: "1"
-        run: |
-          set -euo pipefail
-          pr_number="${{ inputs.pr_number }}"
-          if [[ "$pr_number" == "0" ]]; then pr_number="${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number }}"; fi
-          "$LOOPKEEPER_ROOT/adapters/github/review_pr.sh" "$pr_number"

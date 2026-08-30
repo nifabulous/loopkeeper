@@ -37,7 +37,7 @@ on:
 
 permissions:
   contents: read
-  issues: write
+  issues: read
 
 jobs:
   resolve:
@@ -73,6 +73,8 @@ jobs:
 
   triage:
     needs: resolve
+    outputs:
+      artifact_available: ${{ steps.artifact_status.outputs.available }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -117,6 +119,8 @@ jobs:
           LOOPKEEPER_TRUSTED_SHA: ${{ needs.resolve.outputs.consumer_trusted_sha }}
           LOOPKEEPER_DEFAULT_BRANCH: ${{ needs.resolve.outputs.consumer_default_branch }}
           LOOPKEEPER_MODEL: ${{ vars.LOOPKEEPER_MODEL || 'gpt-5.6-luna' }}
+          LOOPKEEPER_API_STYLE: ${{ vars.LOOPKEEPER_API_STYLE || 'responses' }}
+          LOOPKEEPER_API_BASE_URL: ${{ vars.LOOPKEEPER_API_BASE_URL || '' }}
           LOOPKEEPER_REASONING_EFFORT: ${{ vars.LOOPKEEPER_REASONING_EFFORT || 'medium' }}
           LOOPKEEPER_MAX_INPUT_BYTES: ${{ vars.LOOPKEEPER_MAX_INPUT_BYTES || '120000' }}
           LOOPKEEPER_MAX_OUTPUT_TOKENS: ${{ vars.LOOPKEEPER_MAX_OUTPUT_TOKENS || '32000' }}
@@ -124,11 +128,23 @@ jobs:
           LOOPKEEPER_REQUEST_TIMEOUT: ${{ vars.LOOPKEEPER_REQUEST_TIMEOUT || '900' }}
           LOOPKEEPER_JOB_TIMEOUT_SECONDS: ${{ inputs.job_timeout_seconds }}
           LOOPKEEPER_POLICY_PATH: ${{ inputs.policy_path }}
-          LOOPKEEPER_OPERATOR: ${{ inputs.post_comments && '1' || '0' }}
+          LOOPKEEPER_OPERATOR: "0"
           LOOPKEEPER_ARTIFACT_DIR: ${{ github.workspace }}/loopkeeper-artifacts
         run: |
           set -euo pipefail
           "$LOOPKEEPER_ROOT/adapters/github/triage_issue.sh" "${{ inputs.issue_number }}"
+      - name: Record whether triage artifacts exist
+        id: artifact_status
+        if: always()
+        env:
+          ARTIFACT_DIR: ${{ github.workspace }}/loopkeeper-artifacts
+        run: |
+          set -euo pipefail
+          if [[ -s "$ARTIFACT_DIR/triage.md" && -s "$ARTIFACT_DIR/comment.md" && -s "$ARTIFACT_DIR/triage-metadata.json" ]]; then
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          fi
       - name: Upload triage artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -136,3 +152,55 @@ jobs:
           path: ${{ github.workspace }}/loopkeeper-artifacts
           if-no-files-found: error
           retention-days: 7
+
+  writer:
+    if: ${{ inputs.post_comments && needs.triage.result == 'success' && needs.triage.outputs.artifact_available == 'true' }}
+    needs: [resolve, triage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    concurrency:
+      group: loopkeeper-issue-triage-writer-${{ inputs.consumer_repo }}-${{ inputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out consumer at forge-verified default-branch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.consumer_repo }}
+          ref: ${{ needs.resolve.outputs.consumer_trusted_sha }}
+          path: consumer
+          fetch-depth: 1
+      - name: Check out Loopkeeper at immutable release SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.loopkeeper_repo }}
+          ref: ${{ inputs.loopkeeper_sha }}
+          path: loopkeeper
+          fetch-depth: 1
+      - name: Verify both writer checkouts before trusted reads
+        env:
+          CONSUMER_TRUSTED_SHA: ${{ needs.resolve.outputs.consumer_trusted_sha }}
+          LOOPKEEPER_SHA: ${{ inputs.loopkeeper_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C consumer rev-parse HEAD)" == "$CONSUMER_TRUSTED_SHA" ]]
+          [[ "$(git -C loopkeeper rev-parse HEAD)" == "$LOOPKEEPER_SHA" ]]
+      - name: Download immutable triage artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: loopkeeper-triage-${{ github.run_id }}
+          path: ${{ github.workspace }}/loopkeeper-triage-artifact
+      - name: Run explicitly enabled issue writer
+        working-directory: consumer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ inputs.consumer_repo }}
+          LOOPKEEPER_TRIAGE_ARTIFACT_DIR: ${{ github.workspace }}/loopkeeper-triage-artifact
+          LOOPKEEPER_CHECK_MAX_RAW_BYTES: ${{ vars.LOOPKEEPER_CHECK_MAX_RAW_BYTES || '200000' }}
+          LOOPKEEPER_OPERATOR: "1"
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/loopkeeper/adapters/github/post_triage_comment.sh" "${{ inputs.issue_number }}"

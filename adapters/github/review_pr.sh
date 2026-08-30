@@ -109,9 +109,9 @@ if [[ ! "$LOOPKEEPER_MODEL" =~ ^[A-Za-z0-9._:/-]+$ ]]; then
 fi
 
 case "$LOOPKEEPER_REASONING_EFFORT" in
-  none|low|medium|high|xhigh) ;;
+  none|low|medium|high|xhigh|max) ;;
   *)
-    echo "LOOPKEEPER_REASONING_EFFORT must be one of: none, low, medium, high, xhigh." >&2
+    echo "LOOPKEEPER_REASONING_EFFORT must be one of: none, low, medium, high, xhigh, max." >&2
     exit 2
     ;;
 esac

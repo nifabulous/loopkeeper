@@ -56,7 +56,9 @@ jobs:
             python3 --version
           } >>"$GITHUB_STEP_SUMMARY"
       - name: Run shell and automation contracts
-        run: tests/github/test_automation.sh
+        run: |
+          tests/github/test_automation.sh
+          tests/mutation/test_security_guards.sh
 
   workflow-validation:
     runs-on: ubuntu-latest

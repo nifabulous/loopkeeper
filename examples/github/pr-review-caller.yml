@@ -10,6 +10,11 @@ on:
     workflows: [CI]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -28,6 +33,7 @@ jobs:
       loopkeeper_sha: 0123456789abcdef0123456789abcdef01234567
       ci_workflow_name: CI
       ci_workflow_file: ci.yml
+      pr_number: ${{ inputs.pr_number || 0 }}
       expected_head_sha: ${{ github.event.workflow_run.head_sha || '' }}
       job_timeout_seconds: 1200
       post_comments: false

@@ -25,7 +25,7 @@ from .errors import ConfigError, TransportError
 RESPONSES_API_URL = "https://api.openai.com/v1/responses"
 CHAT_COMPLETIONS_API_URL = "https://api.openai.com/v1/chat/completions"
 API_STYLES = {"responses", "chat"}
-EFFORTS = {"none", "low", "medium", "high", "xhigh"}
+EFFORTS = {"none", "low", "medium", "high", "xhigh", "max"}
 MODEL_PATTERN = re.compile(r"^[A-Za-z0-9._:/-]+$")
 
 TRUNCATION_MARKER = "\n[TRUNCATED INPUT]"
@@ -96,7 +96,7 @@ def resolve_api_url(api_style: str, override: str | None) -> str:
     if api_style not in API_STYLES:
         raise ConfigError(f"API style must be one of {sorted(API_STYLES)}, got {api_style!r}")
     url = override
-    if url is None:
+    if not url:
         return CHAT_COMPLETIONS_API_URL if api_style == "chat" else RESPONSES_API_URL
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme not in {"https", "http"} or not parsed.netloc:

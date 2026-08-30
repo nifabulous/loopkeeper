@@ -15,6 +15,7 @@ from loopkeeper.transport import (
     TransportConfig,
     TransportError,
     build_payload,
+    resolve_api_url,
     request_model,
     read_file_bounded,
 )
@@ -37,6 +38,11 @@ def test_chat_payload_has_no_unsupported_store_flag():
         api_style="chat",
     )
     assert "store" not in payload
+
+
+def test_empty_api_base_url_uses_the_wire_style_default():
+    assert resolve_api_url("responses", "") == "https://api.openai.com/v1/responses"
+    assert resolve_api_url("chat", "") == "https://api.openai.com/v1/chat/completions"
 
 
 def test_missing_model_binding_fails_loudly():

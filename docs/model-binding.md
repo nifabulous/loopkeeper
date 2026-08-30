@@ -18,7 +18,7 @@ Both slots call through `src/loopkeeper/transport.py`, whose endpoint and wire f
 | Wire style | `responses` | flag, else `LOOPKEEPER_API_STYLE` (`responses` \| `chat`) |
 | Endpoint URL | provider per-style default | flag, else `LOOPKEEPER_API_BASE_URL`, else per-style default |
 
-`chat` speaks the OpenAI-compatible chat completions shape most third-party providers and gateways expose, so a cross-vendor swap is: set `LOOPKEEPER_MODEL` to the provider's model id, `LOOPKEEPER_API_BASE_URL` to its endpoint, and put its key in the `LOOPKEEPER_API_KEY` secret (used as a bearer token). The base URL must be https outside loopback — the key travels as a header — and may not carry a query or fragment. `OPENAI_API_KEY` is accepted only through the Relay adapter, never inside the provider-neutral package.
+`chat` speaks the OpenAI-compatible chat completions shape most third-party providers and gateways expose, so a cross-vendor swap is: set `LOOPKEEPER_MODEL` to the provider's model id, set `LOOPKEEPER_API_STYLE=chat`, set `LOOPKEEPER_API_BASE_URL` to its chat-completions endpoint, and put its key in the `LOOPKEEPER_API_KEY` secret (used as a bearer token). Set `LOOPKEEPER_REASONING_EFFORT=none` unless the provider explicitly accepts that OpenAI extension; providers such as DeepSeek and GLM reject the `reasoning_effort` key on chat completions. The base URL must be https outside loopback — the key travels as a header — and may not carry a query or fragment. `OPENAI_API_KEY` is accepted only through the Relay adapter, never inside the provider-neutral package.
 
 ## Research agents (`.claude/agents/*.md` style)
 

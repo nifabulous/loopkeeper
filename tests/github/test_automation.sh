@@ -10,6 +10,7 @@ SHELL_ADAPTERS=(
   "$ROOT/adapters/github/review_pr.sh"
   "$ROOT/adapters/github/render_summary.sh"
   "$ROOT/adapters/github/triage_issue.sh"
+  "$ROOT/adapters/github/post_triage_comment.sh"
 )
 
 fail() {
@@ -45,10 +46,12 @@ grep -q 'LOOPKEEPER_DEFAULT_BRANCH' "$ROOT/adapters/github/triage_issue.sh" || f
 grep -q 'verify_consumer_checkout' "$ROOT/adapters/github/triage_issue.sh" || fail "triage forge-backed checkout verification missing"
 grep -q 'LOOPKEEPER_TRUSTED_SHA:-HEAD' "$ROOT/adapters/github/triage_issue.sh" && fail "triage still falls back to HEAD for trusted reads"
 grep -q 'verify_consumer_checkout' "$ROOT/adapters/github/common.sh" || fail "shared checkout verifier missing"
-# Counts non-comment lines that invoke the helper; the initial read and the
-# pre-write recheck must each be bounded.
+# Counts non-comment lines that invoke the helper; the model-side initial read
+# and writer-side final read must each be bounded.
 triage_bounded_reads="$(grep -c '^[^#]*capture_bounded_stream' "$ROOT/adapters/github/triage_issue.sh" || true)"
-(( triage_bounded_reads >= 2 )) || fail "triage must bound both issue metadata reads"
+writer_bounded_reads="$(grep -c '^[^#]*capture_bounded_stream' "$ROOT/adapters/github/post_triage_comment.sh" || true)"
+(( triage_bounded_reads >= 1 )) || fail "triage must bound its issue metadata read"
+(( writer_bounded_reads >= 1 )) || fail "triage writer must bound its final issue metadata read"
 grep -q 'capture_bounded_stream.*CI runs' "$ROOT/adapters/github/review_pr.sh" || fail "CI discovery is not bounded"
 grep -q 'loopkeeper-superseded:' "$ROOT/src/loopkeeper/adapters/github/comment_state.py" || fail "superseded marker missing"
 grep -q 'LOOPKEEPER_OPERATOR' "$ROOT/src/loopkeeper/adapters/github/arbiter_io.py" || fail "arbiter writer gate missing"
