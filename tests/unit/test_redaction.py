@@ -551,6 +551,20 @@ def test_the_generic_core_declares_the_placeholders_it_substituted():
     assert result.placeholders == ("ACCOUNT",)
 
 
+@pytest.mark.parametrize(
+    ("source", "placeholder"),
+    [
+        ("Authorization: Bearer abcdefghijklmnopqrstuvwxyz\n", "REDACTED"),
+        ("Cookie: session=abcdefghijklmnopqrstuvwxyz\n", "REDACTED_COOKIE"),
+    ],
+)
+def test_generic_header_placeholders_are_declared(source, placeholder):
+    result = sanitize_with_metadata(source)
+
+    assert f"[{placeholder}]" in result.text
+    assert placeholder in result.placeholders
+
+
 def test_supplied_placeholder_text_is_not_declared_as_redacted():
     """The input is attacker-controlled, so presence cannot imply substitution.
 
@@ -560,16 +574,27 @@ def test_supplied_placeholder_text_is_not_declared_as_redacted():
     """
     result = sanitize_with_metadata("cfg = \"[ACCOUNT]\"\n")
 
-    assert result.text == "cfg = \"[ACCOUNT]\"\n"
+    assert result.text == 'cfg = "[source-placeholder-literal]"\n'
     assert result.placeholders == ()
 
 
 def test_a_real_substitution_is_declared_even_beside_supplied_placeholder_text():
-    """Counting, not membership: a supplied copy must not mask a real one."""
+    """A source literal and a real substitution keep distinct exact shapes."""
     result = sanitize_with_metadata("cfg = \"[ACCOUNT]\"\nsize = 12345678\n")
 
-    assert result.text == "cfg = \"[ACCOUNT]\"\nsize = [ACCOUNT]\n"
+    assert result.text == (
+        'cfg = "[source-placeholder-literal]"\n'
+        "size = [ACCOUNT]\n"
+    )
     assert result.placeholders == ("ACCOUNT",)
+
+
+def test_supplied_placeholder_cannot_share_the_trusted_shape_of_a_substitution():
+    """Provenance is per occurrence, not merely a count for the whole input."""
+    result = sanitize_with_metadata("cfg = \"[ACCOUNT]\"\nsize = 12345678\n")
+
+    assert result.text.count("[ACCOUNT]") == 1
+    assert "[source-placeholder-literal]" in result.text
 
 
 def test_supplied_placeholder_text_does_not_mask_a_different_substitution():

@@ -39,13 +39,32 @@ def test_prompt_says_what_a_placeholder_is_not_only_its_name(policy, artifacts):
     instructions = prompt.instructions.lower()
     assert "removed" in instructions
     assert "not evidence of invalid syntax" in instructions
-    assert "do not report a finding whose subject is a placeholder" in instructions
+    assert "do not report a finding based on the substitution itself" in instructions
 
 
 def test_prompt_omits_the_placeholder_note_when_nothing_was_redacted(policy, artifacts):
     prompt = render_review_prompt(policy, RedactionResult("safe", ()), artifacts)
 
     assert "Active redaction placeholders" not in prompt.instructions
+
+
+def test_prompt_keeps_source_placeholder_literals_reviewable(policy):
+    artifacts = UntrustedArtifacts(
+        metadata="",
+        diff='cfg = "[source-placeholder-literal]"\nsize = [ACCOUNT]\n',
+        previous_review=None,
+        checks=None,
+    )
+
+    prompt = render_review_prompt(
+        policy,
+        RedactionResult("safe", ("ACCOUNT",)),
+        artifacts,
+    )
+
+    assert "Every exact occurrence of a listed bracketed token" in prompt.instructions
+    assert "was present in source" in prompt.instructions
+    assert "remains reviewable evidence" in prompt.instructions
 
 
 def test_prompt_does_not_contain_second_category_table(policy, artifacts):

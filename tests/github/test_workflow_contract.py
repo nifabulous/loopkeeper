@@ -171,6 +171,13 @@ def test_review_workflows_use_the_shared_summary_renderer():
     assert "GITHUB_STEP_SUMMARY" in helper
 
 
+def test_issue_triage_carries_redaction_metadata_into_the_prompt():
+    raw = (ROOT / "adapters/github/triage_issue.sh").read_text(encoding="utf-8")
+
+    assert "--metadata-file" in raw
+    assert "render_redaction_guidance" in raw
+
+
 def test_review_artifact_records_evidence_and_diff_coverage_metadata():
     raw = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
     for field in (

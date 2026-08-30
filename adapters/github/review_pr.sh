@@ -456,13 +456,17 @@ if [[ -n "$PREV_REVIEW_BODY" ]]; then
 else
   printf '(no previous review)\n' >"$TEMP_DIR/prev-review.md"
 fi
-if ! python3 -m loopkeeper.redaction <"$TEMP_DIR/prev-review.md" >"$TEMP_DIR/prev-review-sanitized.md" 2>/dev/null; then
+if ! python3 -m loopkeeper.redaction \
+  --metadata-file "$TEMP_DIR/redaction-prev-review.json" \
+  <"$TEMP_DIR/prev-review.md" >"$TEMP_DIR/prev-review-sanitized.md" 2>/dev/null; then
   echo "Could not sanitize the previous review; refusing to pass raw history to the model." >&2
   exit 4
 fi
 
 # Collect and sanitize metadata/file changes before wrapping as untrusted.
-if ! printf '%s\n' "$METADATA" | python3 -m loopkeeper.redaction >"$TEMP_DIR/metadata.json" 2>/dev/null; then
+if ! printf '%s\n' "$METADATA" | python3 -m loopkeeper.redaction \
+  --metadata-file "$TEMP_DIR/redaction-metadata.json" \
+  >"$TEMP_DIR/metadata.json" 2>/dev/null; then
   echo "Could not sanitize PR metadata; refusing to pass raw metadata to the model." >&2
   exit 4
 fi
@@ -557,7 +561,9 @@ PR_FILES_PATCH_TRUNCATED="$(jq -s '[.[] | select(.patch_truncated == true)] | le
 if ! jq -s --argjson files_truncated "$PR_FILES_TRUNCATED" \
   '{format: "github-pull-request-files-v1", files: ., files_truncated: ($files_truncated == 1)}' "$TEMP_DIR/pr-files.jsonl" \
   | capture_bounded_stream "$LOOPKEEPER_MAX_INPUT_BYTES" "pull-request file changes" \
-  | python3 -m loopkeeper.redaction >"$TEMP_DIR/pr.diff" 2>/dev/null; then
+  | python3 -m loopkeeper.redaction \
+      --metadata-file "$TEMP_DIR/redaction-diff.json" \
+      >"$TEMP_DIR/pr.diff" 2>/dev/null; then
   echo "Could not sanitize the bounded pull-request file changes; refusing to pass raw diff to the model." >&2
   exit 4
 fi
@@ -698,6 +704,7 @@ else
   fi
 fi
 if ! python3 -m loopkeeper.redaction \
+  --metadata-file "$TEMP_DIR/redaction-verification.json" \
   <"$TEMP_DIR/verification-results.txt" \
   >"$TEMP_DIR/verification-results-sanitized.txt" 2>/dev/null; then
   echo "Could not sanitize verification results; refusing to pass raw check data to the model." >&2
@@ -738,6 +745,40 @@ show_trusted() {
   else
     printf '\n\n## Contract\nNo contract on main for this branch; nothing is out of scope.\n'
   fi
+
+  python3 - \
+    "$TEMP_DIR/redaction-metadata.json" \
+    "$TEMP_DIR/redaction-diff.json" \
+    "$TEMP_DIR/redaction-prev-review.json" \
+    "$TEMP_DIR/redaction-verification.json" <<'PY'
+import json
+import sys
+
+from loopkeeper.prompt import render_redaction_guidance
+
+placeholders = []
+seen = set()
+source_placeholders_defanged = False
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as source:
+        metadata = json.load(source)
+    source_placeholders_defanged = (
+        source_placeholders_defanged
+        or metadata.get("source_placeholders_defanged") is True
+    )
+    for placeholder in metadata.get("placeholders", []):
+        if isinstance(placeholder, str) and placeholder not in seen:
+            seen.add(placeholder)
+            placeholders.append(placeholder)
+
+guidance = render_redaction_guidance(
+    tuple(placeholders),
+    source_placeholders_defanged=source_placeholders_defanged,
+)
+if guidance:
+    print("\n## Redaction provenance")
+    print(guidance)
+PY
 
   context_prefix="$(printf '\n\n%s\n%s\n' \
     '## Trusted reference material (not policy)' \

@@ -35,8 +35,11 @@ reason the exemptions failed, and it applies to any future one.
 
 from __future__ import annotations
 
+import argparse
+import json
 import re
 import sys
+from pathlib import Path
 from typing import NamedTuple, Protocol
 
 from .errors import SecurityError
@@ -60,6 +63,8 @@ class Redactor(Protocol):
 # ---------------------------------------------------------------------------
 
 _PLACEHOLDER_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,31}$")
+_SOURCE_PLACEHOLDER_RE = re.compile(r"\[[A-Z][A-Z0-9_]{0,31}\]")
+SOURCE_PLACEHOLDER_LITERAL = "[source-placeholder-literal]"
 _MAX_OUTPUT_BYTES = 1_000_000
 _MAX_INPUT_BYTES = 1_000_000
 
@@ -360,6 +365,16 @@ def _generic_redact(text: str) -> str:
     return "".join(_sanitize_line(line) for line in text.splitlines(keepends=True))
 
 
+def _defang_source_placeholders(text: str) -> str:
+    """Remove untrusted text from the reserved placeholder namespace.
+
+    Placeholder names are control-plane metadata once the prompt declares
+    them. Source text must therefore be unable to forge the same exact token.
+    The visible marker deliberately remains reviewable source evidence.
+    """
+    return _SOURCE_PLACEHOLDER_RE.sub(SOURCE_PLACEHOLDER_LITERAL, text)
+
+
 # Every placeholder the generic core can substitute. A reader of the sanitized
 # text -- including the model -- cannot otherwise tell a placeholder from the
 # file's own content, and will read `size = [ACCOUNT]` as malformed input
@@ -370,8 +385,10 @@ GENERIC_PLACEHOLDERS: tuple[str, ...] = (
     "EMAIL",
     "IBAN",
     "PHONE",
+    "REDACTED",
     "REDACTED_CARD",
     "REDACTED_CLOUD_KEY",
+    "REDACTED_COOKIE",
     "REDACTED_PRIVATE_KEY",
     "REDACTED_SECRET_ASSIGNMENT",
     "REDACTED_TOKEN",
@@ -390,10 +407,9 @@ def _introduced_placeholders(before: str, after: str) -> tuple[str, ...]:
     subject is a placeholder, which would hand the author of the reviewed code
     a way to silence findings about their own literal.
 
-    Counting instead of testing membership closes it. A placeholder is declared
-    only when the sanitized text holds more of it than the input did, so
-    supplied copies never qualify on their own and a real substitution
-    alongside them still does.
+    The input path first moves supplied placeholder-shaped tokens out of the
+    reserved namespace. Counting then declares a placeholder only when the
+    sanitized text holds more exact copies than that prepared input did.
     """
     return tuple(
         name
@@ -407,22 +423,30 @@ def _introduced_placeholders(before: str, after: str) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 
-def sanitize_with_metadata(text: str, redactor: Redactor | None = None) -> RedactionResult:
+def sanitize_with_metadata(
+    text: str,
+    redactor: Redactor | None = None,
+    *,
+    defang_source_placeholders: bool = True,
+) -> RedactionResult:
     if not isinstance(text, str):
         raise TypeError("text must be str")
-    generic = _generic_redact(text)
+    prepared = _defang_source_placeholders(text) if defang_source_placeholders else text
+    generic = _generic_redact(prepared)
     if redactor is None:
-        return RedactionResult(generic, _introduced_placeholders(text, generic))
+        if len(generic.encode("utf-8")) > _MAX_OUTPUT_BYTES:
+            raise SecurityError("sanitized output exceeds byte ceiling")
+        return RedactionResult(generic, _introduced_placeholders(prepared, generic))
     result = redactor.redact(generic)
     _validate_result(result)
     final_text = _generic_redact(result.text)
     # Merge the plugin's declared placeholders with the core's own. Reporting
     # only the plugin's left the core's substitutions undeclared whenever a
     # plugin was configured, and undeclared entirely when one was not.
-    # The comparison runs against the original input, so a placeholder the
-    # input already carried is not attributed to either pass.
+    # The comparison runs against the prepared input, where source literals no
+    # longer share the exact control token used by either sanitizer pass.
     normalized = _normalize_placeholders(
-        tuple(result.placeholders) + _introduced_placeholders(text, final_text)
+        tuple(result.placeholders) + _introduced_placeholders(prepared, final_text)
     )
     if len(final_text.encode("utf-8")) > _MAX_OUTPUT_BYTES:
         raise SecurityError("sanitized output exceeds byte ceiling")
@@ -430,10 +454,25 @@ def sanitize_with_metadata(text: str, redactor: Redactor | None = None) -> Redac
 
 
 def sanitize(text: str, redactor: Redactor | None = None) -> str:
-    return sanitize_with_metadata(text, redactor).text
+    # ``sanitize`` is also used on model output. Only the metadata-aware input
+    # path reserves placeholder-shaped source tokens; output sanitization must
+    # preserve harmless bracketed prose.
+    return sanitize_with_metadata(
+        text,
+        redactor,
+        defang_source_placeholders=False,
+    ).text
 
 
-if __name__ == "__main__":  # pragma: no cover - exercised by shell adapters
+def _main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Sanitize bounded text from stdin")
+    parser.add_argument(
+        "--metadata-file",
+        type=Path,
+        help="write input-redaction provenance as JSON",
+    )
+    args = parser.parse_args(argv)
+
     stream = getattr(sys.stdin, "buffer", sys.stdin)
     raw = stream.read(_MAX_INPUT_BYTES + 1)
     if isinstance(raw, bytes):
@@ -444,4 +483,27 @@ if __name__ == "__main__":  # pragma: no cover - exercised by shell adapters
         if len(raw.encode("utf-8")) > _MAX_INPUT_BYTES:
             raise SystemExit(f"input exceeds {_MAX_INPUT_BYTES} bytes")
         value = raw
-    sys.stdout.write(sanitize(value))
+
+    if args.metadata_file is None:
+        sys.stdout.write(sanitize(value))
+        return 0
+
+    source_placeholders_defanged = _SOURCE_PLACEHOLDER_RE.search(value) is not None
+    result = sanitize_with_metadata(value)
+    args.metadata_file.write_text(
+        json.dumps(
+            {
+                "placeholders": list(result.placeholders),
+                "source_placeholders_defanged": source_placeholders_defanged,
+            },
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    sys.stdout.write(result.text)
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover - exercised by shell adapters
+    raise SystemExit(_main())

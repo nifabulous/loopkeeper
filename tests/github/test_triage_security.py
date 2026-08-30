@@ -90,7 +90,21 @@ case "${1:-}" in
     ;;
   -m)
     case "${2:-}" in
-      loopkeeper.redaction|loopkeeper.truncate|loopkeeper.review_output)
+      loopkeeper.redaction)
+        metadata_file=""
+        while (( $# )); do
+          if [[ "$1" == "--metadata-file" ]]; then
+            metadata_file="$2"
+            shift
+          fi
+          shift
+        done
+        if [[ -n "$metadata_file" ]]; then
+          printf '%s\n' '{"placeholders":[],"source_placeholders_defanged":false}' >"$metadata_file"
+        fi
+        cat
+        ;;
+      loopkeeper.truncate|loopkeeper.review_output)
         cat
         ;;
       loopkeeper.transport)

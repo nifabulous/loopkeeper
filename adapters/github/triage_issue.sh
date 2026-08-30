@@ -153,7 +153,9 @@ if (( BOUNDED_OK )); then
   fi
 fi
 
-if ! printf '%s\n' "$METADATA" | python3 -m loopkeeper.redaction >"$TEMP_DIR/issue.json" 2>/dev/null; then
+if ! printf '%s\n' "$METADATA" | python3 -m loopkeeper.redaction \
+  --metadata-file "$TEMP_DIR/redaction-issue.json" \
+  >"$TEMP_DIR/issue.json" 2>/dev/null; then
   echo "Could not sanitize issue metadata; refusing to pass raw metadata to the model." >&2
   exit 4
 fi
@@ -177,6 +179,24 @@ EOF
   show_trusted "$LOOPKEEPER_TRUSTED_SHA" "$LOOPKEEPER_POLICY_PATH" 2>/dev/null \
     || show_trusted "$LOOPKEEPER_TRUSTED_SHA" "examples/relay/review-policy.md" 2>/dev/null \
     || echo "No triage policy."
+  python3 - "$TEMP_DIR/redaction-issue.json" <<'PY'
+import json
+import sys
+
+from loopkeeper.prompt import render_redaction_guidance
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    metadata = json.load(source)
+guidance = render_redaction_guidance(
+    tuple(metadata.get("placeholders", [])),
+    source_placeholders_defanged=(
+        metadata.get("source_placeholders_defanged") is True
+    ),
+)
+if guidance:
+    print("\n## Redaction provenance")
+    print(guidance)
+PY
 } >"$TEMP_DIR/triage-instructions.md"
 
 {

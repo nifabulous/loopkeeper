@@ -80,12 +80,14 @@ carried for pre-release behaviour.
   matched inside an alphanumeric token, so an identifier survived by being
   wrapped in letters -- the same evasion as wrapping a card in hex. The rule now
   redacts strictly more than before and never less.
-- The generic redactor declares the placeholders it substituted, and the prompt
-  states what a placeholder means. Previously the core reported placeholders
-  only when a plugin redactor was configured -- which the GitHub adapters never
-  are -- so a redacted value reached the model with nothing to distinguish it
-  from the file's own content, and was reported as a defect in the reviewed
-  code. Redaction strength is unchanged: no rule was relaxed.
+- The generic redactor declares every placeholder it substituted, and both the
+  Python CLI and GitHub adapters carry that provenance into the model prompt.
+  Previously the shell adapters discarded the metadata entirely, so a redacted
+  value reached the model with nothing to distinguish it from the file's own
+  content and was reported as a defect in the reviewed code. Placeholder-shaped
+  text supplied by the source is now visibly defanged into a separate,
+  reviewable marker, so an attacker cannot borrow the trusted shape of a real
+  substitution. Redaction strength is unchanged: no rule was relaxed.
 
 ### Known limitations
 

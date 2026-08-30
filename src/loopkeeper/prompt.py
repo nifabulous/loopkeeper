@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .policy import Policy
-from .redaction import RedactionResult
+from .redaction import SOURCE_PLACEHOLDER_LITERAL, RedactionResult
 from .review_output import REVIEW_TRAILER_CONTRACT
 from .truncate import truncate_utf8
 from .untrusted import wrap_untrusted_bounded
@@ -42,6 +42,32 @@ def _bound(text: str, limit: int) -> str:
     return truncate_utf8(text, limit)
 
 
+def render_redaction_guidance(
+    placeholders: tuple[str, ...],
+    *,
+    source_placeholders_defanged: bool = False,
+) -> str:
+    """Render trusted guidance without confusing source literals with control."""
+    parts: list[str] = []
+    if placeholders:
+        placeholder_list = ", ".join(placeholders)
+        parts.append(
+            f"Active redaction placeholders: {placeholder_list}."
+            " Every exact occurrence of a listed bracketed token in the"
+            " sanitized artifacts was substituted by this harness, not copied"
+            " from source. Such an occurrence is not evidence of invalid syntax,"
+            " malformed data, or any other defect. Do not report a finding based"
+            " on the substitution itself, and do not infer the removed value."
+        )
+    if source_placeholders_defanged:
+        parts.append(
+            f"{SOURCE_PLACEHOLDER_LITERAL} marks placeholder-shaped bracketed"
+            " text that was present in source. It is source content, not a"
+            " redaction, and remains reviewable evidence."
+        )
+    return " ".join(parts)
+
+
 def render_review_prompt(
     policy: Policy,
     redaction: RedactionResult,
@@ -70,20 +96,21 @@ def render_review_prompt(
     parts.append("## Data handling")
     # Data handling plus active redactor placeholders
     handling = _bound(policy.data_handling, MAX_SECTION_BYTES)
-    if redaction.placeholders:
-        placeholder_list = ", ".join(redaction.placeholders)
-        # Naming the placeholders is not enough. Without saying what they are,
-        # a reader takes `size = [ACCOUNT]` for the file's own content and
-        # reports it as malformed input -- a defect in the harness rendered as
-        # a defect in the code under review.
-        handling = handling + (
-            f"\n\nActive redaction placeholders: {placeholder_list}."
-            " A bracketed placeholder marks a value this harness removed before"
-            " you saw it. It is substituted text, never the file's own content,"
-            " and it is not evidence of invalid syntax, malformed data, or any"
-            " other defect. Do not report a finding whose subject is a"
-            " placeholder, and do not infer the removed value."
+    source_placeholders_defanged = any(
+        SOURCE_PLACEHOLDER_LITERAL in content
+        for content in (
+            artifacts.metadata,
+            artifacts.diff,
+            artifacts.previous_review or "",
+            artifacts.checks or "",
         )
+    )
+    redaction_guidance = render_redaction_guidance(
+        redaction.placeholders,
+        source_placeholders_defanged=source_placeholders_defanged,
+    )
+    if redaction_guidance:
+        handling = handling + "\n\n" + redaction_guidance
     parts.append(handling)
 
     # Consumer-owned sections follow the structural guidance, in the order the
