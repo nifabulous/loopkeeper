@@ -488,6 +488,29 @@ def test_a_card_wrapped_in_hex_padding_is_still_redacted():
     assert "4111111111111111" not in sanitized
 
 
+def test_grouped_card_identifiers_inside_a_hex_token_are_redacted():
+    """Separators do not rescue a grouped identifier from hex padding either.
+
+    Coverage requested by the review: contiguous, hyphen-grouped, and
+    space-grouped card-sized runs, each embedded in an attacker-controlled
+    hexadecimal-looking token.
+    """
+    for identifier in ("4111111111111111", "1234-5678-9012-3456", "1234 5678 9012 3456"):
+        token = "abcdef" + identifier + "abcdefabcd"
+
+        sanitized = sanitize(f"value = {token}\n")
+
+        assert identifier not in sanitized, identifier
+
+
+def test_a_card_at_digest_length_is_redacted():
+    """Reaching a digest's length is not provenance either."""
+    token = "a" * 24 + "4111111111111111" + "b" * 24
+    assert len(token) == 64
+
+    assert "4111111111111111" not in sanitize(f"value = {token}\n")
+
+
 def test_an_account_sized_run_inside_a_hex_token_is_redacted():
     """Letters around a digit run are padding, not provenance.
 

@@ -20,13 +20,17 @@ The fix for that is to *declare* the substitution, not to make fewer of them.
 prompt explains what a placeholder is, so an over-broad match costs the reviewer
 a value it can no longer read -- never a finding it wrongly raises.
 
-Do not narrow a rule here to reduce false positives.  Three attempts, three
-bypasses, each defeated by input the attacker writes: a cue term near an account
-number is a cue the attacker omits; a Luhn check on a card admits
-"1234 5678 9012 3456"; and exempting hexadecimal digests admits any card wrapped
-in thirty-two characters of hex padding.  The shape a rule exempts is a shape the
-attacker can produce.  Each attempt is recorded at the rule it would be
-reintroduced on.
+No rule here carries an exemption, and none should be given one.  Three were
+tried on this branch and all three were removed as bypasses: a cue term near an
+account number (the attacker omits the cue), a Luhn check on a card (admits
+"1234 5678 9012 3456"), and a hexadecimal-digest skip (admits a card inside
+thirty-two characters of hex padding).  None of the three is implemented.  Each
+is recorded at the rule it would be reintroduced on, phrased as a rejected
+approach rather than as behaviour, because a reader of this module -- human or
+model -- otherwise takes the description for the code.
+
+The shape a rule exempts is a shape the attacker can write.  That is the whole
+reason the exemptions failed, and it applies to any future one.
 """
 
 from __future__ import annotations
@@ -296,11 +300,15 @@ _EXEMPT_RULES = (
 
 
 def _redact_card(match: re.Match[str]) -> str:
-    # Length is the whole test, deliberately. Every refinement tried here has
-    # opened a bypass, because the input is attacker-controlled and any shape
-    # this rule exempts is a shape the attacker can produce: a Luhn check lets
-    # "1234 5678 9012 3456" through, and exempting hex-looking tokens lets a
-    # card through inside 32 characters of padding.
+    # This function has no exemptions. Digit count is the only test, and every
+    # match in range is replaced regardless of what surrounds it.
+    #
+    # Do not add one. Two were tried on this branch and both were removed: a
+    # Luhn check (rejected -- it admitted "1234 5678 9012 3456") and a
+    # hexadecimal-digest skip (rejected -- it admitted a card inside 32
+    # characters of hex padding). Neither is present below. The input is
+    # attacker-controlled, so any shape this rule exempts is a shape the
+    # attacker can write.
     digits = sum(character.isdigit() for character in match.group(0))
     if 13 <= digits <= 19:
         return "[REDACTED_CARD]"
