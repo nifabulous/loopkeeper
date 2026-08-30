@@ -11,14 +11,21 @@ BIC/SWIFT codes are preserved (public directory data), matching the codex
 sanitizer corpus.
 
 This is the *generic* core, and the text it sees is usually a source diff
-rather than a payment message.  Rules whose shape is ambiguous across those
-two worlds are therefore decided by context, not by shape alone: an account
-number needs a cue term near it, a card number needs its Luhn check digit, and
-neither rule looks inside a hexadecimal digest.  Redaction that fires on a byte
-size or a hash is not merely noisy -- it hands the model corrupted evidence,
-which the model then reports as a defect in the code under review.
-``loopkeeper.adapters.relay.redactor`` keeps the unconditional payment rules
-for callers whose input really is payment traffic.
+rather than a payment message.  Redaction that fires on a byte size or a hash
+is not merely noisy: it hands the model corrupted evidence, which the model
+then reports as a defect in the code under review.
+
+Two responses to that are available, and only one is safe.  Narrowing a rule
+-- requiring a cue term near an account number, or a valid Luhn check digit on
+a card -- reads better on source and opens a hole in untrusted content, where
+the attacker chooses the context.  Both were tried and reverted; see the
+comments at ``_ACCOUNT_RE`` and ``_redact_card``.  Declaring what was removed
+costs nothing, so ``sanitize_with_metadata`` reports the placeholders this core
+substituted and the prompt explains what a placeholder is.
+
+The one narrowing kept is exact rather than heuristic: no payment rule looks
+inside a hexadecimal digest, whose alphabet and length are fixed by the hash
+function and never describe a payment identifier.
 """
 
 from __future__ import annotations
