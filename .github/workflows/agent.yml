@@ -122,6 +122,8 @@ jobs:
           LOOPKEEPER_AGENT_NAME: ${{ inputs.agent_name }}
           LOOPKEEPER_TASK_TEXT: ${{ inputs.task_text }}
           LOOPKEEPER_MODEL: ${{ vars.LOOPKEEPER_MODEL || 'gpt-5.6-luna' }}
+          LOOPKEEPER_API_STYLE: ${{ vars.LOOPKEEPER_API_STYLE || 'responses' }}
+          LOOPKEEPER_API_BASE_URL: ${{ vars.LOOPKEEPER_API_BASE_URL || '' }}
           LOOPKEEPER_REASONING_EFFORT: ${{ vars.LOOPKEEPER_REASONING_EFFORT || 'medium' }}
           LOOPKEEPER_TRUST_KEY_FILE: ${{ github.workspace }}/agent-trust-keys.json
           PYTHONPATH: ${{ github.workspace }}/loopkeeper/src

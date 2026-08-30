@@ -278,15 +278,13 @@ def test_triage_rejects_oversized_initial_metadata(tmp_path):
     assert _write_calls(invocations) == []
 
 
-def test_triage_rejects_oversized_final_metadata_before_write(tmp_path):
-    """The pre-write recheck must be bounded and must precede any write."""
+def test_triage_is_artifact_only_even_if_operator_flag_is_injected(tmp_path):
+    """The model-side adapter has no write path after the workflow split."""
     result, invocations = _run(
-        tmp_path,
-        final_issue_padding=MAX_RAW_BYTES + 1,
-        env_overrides={"LOOPKEEPER_OPERATOR": "1"},
+        tmp_path, env_overrides={"LOOPKEEPER_OPERATOR": "1"}
     )
 
-    assert result.returncode == EXIT_TRUST, result.stdout
+    assert result.returncode == 0, result.stderr
     assert _write_calls(invocations) == []
 
 

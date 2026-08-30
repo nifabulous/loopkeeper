@@ -37,7 +37,6 @@ GH_REPO="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
 : "${LOOPKEEPER_REQUEST_TIMEOUT:=900}"
 : "${LOOPKEEPER_JOB_TIMEOUT_SECONDS:=1200}"
 : "${LOOPKEEPER_JOB_DEADLINE_EPOCH:=$(( $(date +%s) + LOOPKEEPER_JOB_TIMEOUT_SECONDS ))}"
-LOOPKEEPER_BOT_LOGIN="${LOOPKEEPER_BOT_LOGIN:-github-actions[bot]}"
 : "${LOOPKEEPER_POLICY_PATH:=.github/codex/review-policy.md}"
 # Trust root. Both are supplied by issue-triage.yml; there is deliberately no
 # HEAD fallback, because reading policy from an unverified checkout is the
@@ -58,9 +57,9 @@ if [[ ! "$LOOPKEEPER_MODEL" =~ ^[A-Za-z0-9._:/-]+$ ]]; then
 fi
 
 case "$LOOPKEEPER_REASONING_EFFORT" in
-  none|low|medium|high|xhigh) ;;
+  none|low|medium|high|xhigh|max) ;;
   *)
-    echo "LOOPKEEPER_REASONING_EFFORT must be one of: none, low, medium, high, xhigh." >&2
+    echo "LOOPKEEPER_REASONING_EFFORT must be one of: none, low, medium, high, xhigh, max." >&2
     exit 2
     ;;
 esac
@@ -98,60 +97,6 @@ fi
 METADATA="$(<"$TEMP_DIR/metadata.json")"
 FINGERPRINT="$(jq -c '{title: (.title // ""), body: (.body // "")}' <<<"$METADATA" | sha256sum | cut -d' ' -f1)"
 MARKER="<!-- loopkeeper-issue-triage:${ISSUE_NUMBER}:${FINGERPRINT} -->"
-
-# Bounded pagination for comments (not unbounded --paginate)
-collect_issue_comments() {
-  local out="$1"
-  local per_page=100
-  local max_pages=10
-  local page=1
-  : >"$out"
-  while (( page <= max_pages )); do
-    local page_file
-    page_file="$(mktemp)"
-    if ! gh api "repos/${GH_REPO}/issues/${ISSUE_NUMBER}/comments?per_page=${per_page}&page=${page}" >"$page_file" 2>/dev/null; then
-      rm -f "$page_file"
-      return 1
-    fi
-    if ! jq -e 'type == "array"' "$page_file" >/dev/null 2>&1; then
-      rm -f "$page_file"
-      return 1
-    fi
-    local count
-    count="$(jq 'length' "$page_file")"
-    local page_bytes
-    page_bytes="$(wc -c <"$page_file" | tr -d ' ')"
-    if (( page_bytes > ${LOOPKEEPER_CHECK_MAX_RAW_BYTES:-200000} )); then
-      rm -f "$page_file"
-      return 1
-    fi
-    jq -c '.[] | {login: (.user.login // ""), body: (.body // "")}' "$page_file" >>"$out"
-    rm -f "$page_file"
-    if (( count < per_page )); then
-      break
-    fi
-    page=$((page+1))
-  done
-  (( page <= max_pages )) || return 1
-}
-
-if ! collect_issue_comments "$TEMP_DIR/comments.jsonl"; then
-  echo "Could not collect issue comments with bounded pagination; proceeding without suppression." >&2
-  : >"$TEMP_DIR/comments.jsonl"
-  BOUNDED_OK=0
-else
-  BOUNDED_OK=1
-fi
-
-if (( BOUNDED_OK )); then
-  if jq -e -n --arg bot "$LOOPKEEPER_BOT_LOGIN" --arg marker "$MARKER" \
-    'reduce inputs as $comment (false;
-       . or ($comment.login == $bot and ($comment.body | contains($marker))))' \
-    "$TEMP_DIR/comments.jsonl" >/dev/null; then
-    echo "Loopkeeper already triaged issue #${ISSUE_NUMBER} for this issue title and body."
-    exit 0
-  fi
-fi
 
 if ! printf '%s\n' "$METADATA" | python3 -m loopkeeper.redaction \
   --metadata-file "$TEMP_DIR/redaction-issue.json" \
@@ -241,55 +186,19 @@ mv "$TEMP_DIR/triage-truncated.md" "$TEMP_DIR/triage.md"
   printf '%s\n\n' "$MARKER"
   cat "$TEMP_DIR/triage.md"
 } >"$TEMP_DIR/comment.md"
+jq -n \
+  --argjson issue_number "$ISSUE_NUMBER" \
+  --arg fingerprint "$FINGERPRINT" \
+  '{issue_number: $issue_number, fingerprint: $fingerprint}' \
+  >"$TEMP_DIR/triage-metadata.json"
 
 save_triage_artifacts() {
   if [[ -n "${LOOPKEEPER_ARTIFACT_DIR:-}" ]]; then
     mkdir -p "$LOOPKEEPER_ARTIFACT_DIR"
     cp "$TEMP_DIR/triage.md" "$LOOPKEEPER_ARTIFACT_DIR/triage.md"
     cp "$TEMP_DIR/comment.md" "$LOOPKEEPER_ARTIFACT_DIR/comment.md"
+    cp "$TEMP_DIR/triage-metadata.json" "$LOOPKEEPER_ARTIFACT_DIR/triage-metadata.json"
   fi
 }
 save_triage_artifacts
-
-if [[ "${LOOPKEEPER_OPERATOR:-}" != "1" ]]; then
-  echo "Loopkeeper triage completed in read-only mode; no issue write requested."
-  exit 0
-fi
-
-post_issue_comment() {
-  require_operator || return 1
-  gh issue comment "$ISSUE_NUMBER" --repo "$GH_REPO" --body-file "$TEMP_DIR/comment.md"
-}
-
-# Re-read the issue fingerprint and bounded comments immediately before the
-# operator write. A changed issue revision or unavailable history is never
-# published against the stale state.
-if ! gh issue view "$ISSUE_NUMBER" --repo "$GH_REPO" --json title,body,state 2>/dev/null \
-  | capture_bounded_stream "$LOOPKEEPER_CHECK_MAX_RAW_BYTES" "final issue metadata" >"$TEMP_DIR/latest-metadata.json"; then
-  echo "Final issue metadata was unavailable or exceeded its byte bound; refusing to write." >&2
-  exit 4
-fi
-if ! jq -e 'type == "object"' "$TEMP_DIR/latest-metadata.json" >/dev/null 2>&1; then
-  echo "Final issue metadata was not a JSON object; refusing to write." >&2
-  exit 4
-fi
-LATEST_METADATA="$(<"$TEMP_DIR/latest-metadata.json")"
-LATEST_STATE="$(jq -r '.state // empty' <<<"$LATEST_METADATA")"
-LATEST_FINGERPRINT="$(jq -c '{title: (.title // ""), body: (.body // "")}' <<<"$LATEST_METADATA" | sha256sum | cut -d' ' -f1)"
-if [[ "$LATEST_STATE" != "OPEN" || "$LATEST_FINGERPRINT" != "$FINGERPRINT" ]]; then
-  echo "Issue #${ISSUE_NUMBER} changed before comment publication; leaving it to the current issue lifecycle."
-  exit 0
-fi
-FINAL_COMMENTS_FILE="$TEMP_DIR/final-comments.jsonl"
-if ! collect_issue_comments "$FINAL_COMMENTS_FILE"; then
-  echo "Could not re-read bounded issue comments before publication; refusing to write." >&2
-  exit 4
-fi
-if jq -e -n --arg bot "$LOOPKEEPER_BOT_LOGIN" --arg marker "$MARKER" \
-  'reduce inputs as $comment (false; . or ($comment.login == $bot and ($comment.body | contains($marker))))' \
-  "$FINAL_COMMENTS_FILE" >/dev/null; then
-  echo "Loopkeeper triage was already published for issue #${ISSUE_NUMBER}."
-  exit 0
-fi
-post_issue_comment
-save_triage_artifacts
+echo "Loopkeeper triage completed in read-only mode; artifacts are ready for an operator-gated writer."

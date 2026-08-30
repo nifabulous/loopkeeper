@@ -19,7 +19,7 @@ contains "$ROOT/src/loopkeeper/attestation.py" 'compare_digest'
 contains "$ROOT/src/loopkeeper/paths.py" 'leaves declared root'
 contains "$ROOT/src/loopkeeper/redaction.py" 'sanitize_with_metadata'
 contains "$ROOT/src/loopkeeper/adapters/github/comment_state.py" 'loopkeeper-superseded:'
-contains "$ROOT/.github/workflows/pr-review.yml" 'cancel-in-progress: false'
+contains "$ROOT/.github/workflows/pr-review-posting.yml" 'cancel-in-progress: false'
 contains "$ROOT/.github/workflows/pr-review.yml" 'consumer_trusted_sha'
 contains "$ROOT/.github/workflows/pr-review.yml" 'LOOPKEEPER_OPERATOR: "0"'
 

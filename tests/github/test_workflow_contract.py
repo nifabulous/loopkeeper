@@ -73,7 +73,7 @@ def test_readonly_pr_workflow_cannot_publish_comments():
     top_level = raw.split("jobs:", 1)[0]
     assert re.search(r"^\s+pull-requests: read$", top_level, re.MULTILINE)
     assert "pull-requests: write" not in raw
-    assert "if: ${{ inputs.post_comments && github.run_id == 0 }}" in raw
+    assert "\n  writer:\n" not in raw
     assert "if-no-files-found: ignore" in raw
 
 
@@ -194,19 +194,22 @@ def test_review_artifact_records_evidence_and_diff_coverage_metadata():
 
 
 def test_called_workflow_writer_concurrency_is_non_cancelable():
-    raw = (ROOT / ".github/workflows/pr-review.yml").read_text(encoding="utf-8")
+    raw = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")
     assert "cancel-in-progress: false" in raw
     assert re.search(r"concurrency:\s*\n\s+group:.*pr", raw)
 
 
 def test_reusable_workflows_persist_read_only_artifacts():
     pr = (ROOT / ".github/workflows/pr-review.yml").read_text(encoding="utf-8")
+    posting_pr = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")
     triage = (ROOT / ".github/workflows/issue-triage.yml").read_text(encoding="utf-8")
     assert "actions/upload-artifact@" in pr
-    assert "actions/download-artifact@" in pr
+    assert "actions/download-artifact@" not in pr
+    assert "actions/download-artifact@" in posting_pr
     assert "actions/upload-artifact@" in triage
     assert "LOOPKEEPER_ARTIFACT_DIR" in triage
-    assert "LOOPKEEPER_REVIEW_ARTIFACT" in pr
+    assert "LOOPKEEPER_REVIEW_ARTIFACT" not in pr
+    assert "LOOPKEEPER_REVIEW_ARTIFACT" in posting_pr
     assert "LOOPKEEPER_POLICY_PATH:" in pr
     assert "LOOPKEEPER_CONTEXT_PATH:" in pr
     assert "LOOPKEEPER_CONTRACT_PATH:" in pr
@@ -292,6 +295,76 @@ def test_every_workflow_shares_one_valid_default_model():
 
     # Must be bindable: a default that resolve_model rejects fails every run.
     _validate_model_shape(next(iter(values)), "workflow default")
+
+
+def test_workflow_model_steps_pass_provider_wire_configuration():
+    workflows = (
+        "pr-review.yml",
+        "pr-review-posting.yml",
+        "issue-triage.yml",
+        "agent.yml",
+    )
+    for name in workflows:
+        raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+        model_count = raw.count("LOOPKEEPER_MODEL:")
+        assert model_count > 0, name
+        assert raw.count("LOOPKEEPER_API_STYLE: ${{ vars.LOOPKEEPER_API_STYLE || 'responses' }}") == model_count, name
+        assert raw.count("LOOPKEEPER_API_BASE_URL: ${{ vars.LOOPKEEPER_API_BASE_URL || '' }}") == model_count, name
+
+
+def test_pr_caller_manual_dispatch_requires_and_passes_pr_number():
+    for name in ("pr-review-caller.yml", "pr-review-posting-caller.yml"):
+        raw = (ROOT / "examples/github" / name).read_text(encoding="utf-8")
+        assert re.search(
+            r"workflow_dispatch:\s*\n\s+inputs:\s*\n\s+pr_number:\s*\n"
+            r"\s+description: .+\n\s+required: true\n\s+type: number",
+            raw,
+        ), name
+        assert "pr_number: ${{ inputs.pr_number || 0 }}" in raw, name
+
+
+def test_shell_reasoning_effort_allowlists_match_transport():
+    from loopkeeper.transport import EFFORTS
+
+    assert "max" in EFFORTS
+    for relative in ("adapters/github/review_pr.sh", "adapters/github/triage_issue.sh"):
+        raw = (ROOT / relative).read_text(encoding="utf-8")
+        match = re.search(
+            r'case "\$LOOPKEEPER_REASONING_EFFORT" in\s*\n\s*([^\s)]+)\)',
+            raw,
+        )
+        assert match, relative
+        assert set(match.group(1).split("|")) == EFFORTS, relative
+
+
+def test_issue_triage_separates_read_only_model_job_from_writer():
+    raw = (ROOT / ".github/workflows/issue-triage.yml").read_text(encoding="utf-8")
+    top_level = raw.split("jobs:", 1)[0]
+    triage = raw.split("\n  triage:", 1)[1].split("\n  writer:", 1)[0]
+    writer = raw.split("\n  writer:", 1)[1]
+
+    assert re.search(r"^\s+issues: read$", top_level, re.MULTILINE)
+    assert "issues: write" not in triage
+    assert 'LOOPKEEPER_OPERATOR: "0"' in triage
+    assert "artifact_available: ${{ steps.artifact_status.outputs.available }}" in triage
+    assert "inputs.post_comments" in writer
+    assert "needs.triage.outputs.artifact_available == 'true'" in writer
+    assert re.search(r"^\s+issues: write$", writer, re.MULTILINE)
+    assert 'LOOPKEEPER_OPERATOR: "1"' in writer
+    assert "post_triage_comment.sh" in writer
+
+
+def test_ci_shell_gate_runs_mutation_security_guard():
+    raw = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "tests/github/test_automation.sh" in raw
+    assert "tests/mutation/test_security_guards.sh" in raw
+
+
+def test_checkout_release_comments_match_pinned_checkout_version():
+    checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    for path in (ROOT / ".github/workflows").glob("*.yml"):
+        raw = path.read_text(encoding="utf-8")
+        assert f"{checkout} # v7.0.0" not in raw, path.name
 
 
 # ---------------------------------------------------------------------------
@@ -444,9 +517,20 @@ def test_every_caller_is_paired_with_a_reusable_workflow():
 
 def test_no_called_job_requests_a_permission_its_caller_withholds():
     for caller, called in _callers():
-        granted = _workflow_permissions(caller.read_text(encoding="utf-8"))
+        caller_raw = caller.read_text(encoding="utf-8")
+        called_raw = called.read_text(encoding="utf-8")
+        granted = _workflow_permissions(caller_raw)
         assert granted, f"{caller.name} declares no permissions block"
-        for job, wanted in _job_permissions(called.read_text(encoding="utf-8")).items():
+        for job, wanted in _job_permissions(called_raw).items():
+            if (
+                job == "writer"
+                and re.search(r"^\s+post_comments: false$", caller_raw, re.MULTILINE)
+                and "inputs.post_comments" in _job_block(called_raw, job)
+            ):
+                # A literal artifact-only caller cannot schedule this job, so
+                # it never requests the writer token. Posting callers remain
+                # subject to the full permission-subsetting check below.
+                continue
             for scope, level in wanted.items():
                 have = granted.get(scope, "none")
                 assert _PERMISSION_RANK[level] <= _PERMISSION_RANK[have], (
