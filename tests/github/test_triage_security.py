@@ -157,6 +157,9 @@ def _run(
     forge_default: str = DEFAULT_BRANCH,
     issue_padding: int = 0,
     final_issue_padding: int | None = None,
+    issue_title: object = "Stub issue",
+    issue_body: object = "",
+    issue_state: object = "OPEN",
     env_overrides: dict[str, str] | None = None,
     drop_env: tuple[str, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
@@ -176,11 +179,17 @@ def _run(
     _write_stub(stub_dir, "gh", _GH_STUB)
     _write_stub(stub_dir, "python3", _PYTHON_STUB)
 
-    (tmp_path / "issue.json").write_text(_issue_json(issue_padding), encoding="utf-8")
+    issue = json.loads(_issue_json(issue_padding))
+    issue["title"] = issue_title
+    issue["body"] = issue_body if issue_body != "" else issue["body"]
+    issue["state"] = issue_state
+    (tmp_path / "issue.json").write_text(json.dumps(issue), encoding="utf-8")
     if final_issue_padding is not None:
-        (tmp_path / "issue-final.json").write_text(
-            _issue_json(final_issue_padding), encoding="utf-8"
-        )
+        final_issue = json.loads(_issue_json(final_issue_padding))
+        final_issue["title"] = issue_title
+        final_issue["body"] = issue_body if issue_body != "" else final_issue["body"]
+        final_issue["state"] = issue_state
+        (tmp_path / "issue-final.json").write_text(json.dumps(final_issue), encoding="utf-8")
 
     env = dict(os.environ)
     env["PATH"] = f"{stub_dir}{os.pathsep}{env['PATH']}"
@@ -272,6 +281,14 @@ def test_triage_rejects_non_default_branch_tip(tmp_path):
 def test_triage_rejects_oversized_initial_metadata(tmp_path):
     """Issue metadata one byte over the raw bound is unavailable evidence."""
     result, invocations = _run(tmp_path, issue_padding=MAX_RAW_BYTES + 1)
+
+    assert result.returncode == EXIT_TRUST, result.stdout
+    assert _model_calls(invocations) == []
+    assert _write_calls(invocations) == []
+
+
+def test_triage_rejects_malformed_issue_title_before_model_call(tmp_path):
+    result, invocations = _run(tmp_path, issue_title={"nested": "not-a-string"})
 
     assert result.returncode == EXIT_TRUST, result.stdout
     assert _model_calls(invocations) == []

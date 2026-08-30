@@ -90,8 +90,13 @@ if ! gh issue view "$ISSUE_NUMBER" --repo "$GH_REPO" --json number,title,body,ur
   echo "Issue metadata was unavailable or exceeded its byte bound; refusing to triage." >&2
   exit 4
 fi
-if ! jq -e 'type == "object"' "$TEMP_DIR/metadata.json" >/dev/null 2>&1; then
-  echo "Issue metadata was not a JSON object; refusing to triage." >&2
+if ! jq -e \
+  'type == "object"
+   and has("title") and (.title | type) == "string"
+   and has("body") and ((.body == null) or ((.body | type) == "string"))
+   and has("state") and (.state | type) == "string"' \
+  "$TEMP_DIR/metadata.json" >/dev/null 2>&1; then
+  echo "Issue metadata was malformed; refusing to triage." >&2
   exit 4
 fi
 METADATA="$(<"$TEMP_DIR/metadata.json")"

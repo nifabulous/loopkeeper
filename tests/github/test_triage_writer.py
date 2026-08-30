@@ -33,10 +33,13 @@ def _run(
     artifact: bool = True,
     title: str = "Stub issue",
     body: str = "Stub body",
+    raw_title: object | None = None,
+    artifact_title: str = "Stub issue",
     state: str = "OPEN",
     metadata_padding: int = 0,
     comments_available: bool = True,
     existing_marker: bool = False,
+    malformed_comments: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     assert WRITER.is_file(), "the triage writer adapter must exist"
     stubs = tmp_path / "stubs"
@@ -45,7 +48,7 @@ def _run(
     log.touch()
     artifact_dir = tmp_path / "artifact"
     artifact_dir.mkdir()
-    fingerprint = _fingerprint()
+    fingerprint = _fingerprint(artifact_title, body)
     marker = f"<!-- loopkeeper-issue-triage:{ISSUE_NUMBER}:{fingerprint} -->"
     if artifact:
         (artifact_dir / "triage.md").write_text("Stub triage.\n", encoding="utf-8")
@@ -56,13 +59,18 @@ def _run(
         )
 
     issue = json.dumps(
-        {"title": title, "body": body + ("x" * metadata_padding), "state": state}
+        {
+            "title": title if raw_title is None else raw_title,
+            "body": body + ("x" * metadata_padding),
+            "state": state,
+        }
     )
-    comments = (
-        json.dumps([{"user": {"login": BOT}, "body": marker}])
-        if existing_marker
-        else "[]"
-    )
+    if malformed_comments:
+        comments = json.dumps([{"user": {"login": BOT}}, "not-an-object"])
+    elif existing_marker:
+        comments = json.dumps([{"user": {"login": BOT}, "body": marker}])
+    else:
+        comments = "[]"
     gh_stub = f'''\nprintf '%s\\n' "gh $*" >>"$LOOPKEEPER_TEST_LOG"
 case "$*" in
   "issue view"*) printf '%s\\n' {json.dumps(issue)} ;;
@@ -153,6 +161,18 @@ def test_writer_refuses_unavailable_comment_history(tmp_path):
 def test_writer_suppresses_existing_authenticated_marker(tmp_path):
     result, calls = _run(tmp_path, existing_marker=True)
     assert result.returncode == 0
+    assert _writes(calls) == []
+
+
+def test_writer_refuses_malformed_comment_history(tmp_path):
+    result, calls = _run(tmp_path, malformed_comments=True)
+    assert result.returncode != 0
+    assert _writes(calls) == []
+
+
+def test_writer_refuses_malformed_issue_title(tmp_path):
+    result, calls = _run(tmp_path, title="", raw_title=False, artifact_title="")
+    assert result.returncode != 0
     assert _writes(calls) == []
 
 

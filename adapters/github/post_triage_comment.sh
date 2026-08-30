@@ -64,8 +64,13 @@ if ! gh issue view "$ISSUE_NUMBER" --repo "$GH_REPO" --json title,body,state 2>/
   echo "Final issue metadata was unavailable or exceeded its byte bound; refusing to write." >&2
   exit 4
 fi
-if ! jq -e 'type == "object"' "$TEMP_DIR/latest-metadata.json" >/dev/null 2>&1; then
-  echo "Final issue metadata was not a JSON object; refusing to write." >&2
+if ! jq -e \
+  'type == "object"
+   and has("title") and (.title | type) == "string"
+   and has("body") and ((.body == null) or ((.body | type) == "string"))
+   and has("state") and (.state | type) == "string"' \
+  "$TEMP_DIR/latest-metadata.json" >/dev/null 2>&1; then
+  echo "Final issue metadata was malformed; refusing to write." >&2
   exit 4
 fi
 
@@ -80,7 +85,14 @@ if ! paged_gh_api "issues/${ISSUE_NUMBER}/comments" 100 10 >"$TEMP_DIR/comments.
   echo "Could not re-read bounded issue comments before publication; refusing to write." >&2
   exit 4
 fi
-if ! jq -e 'type == "array"' "$TEMP_DIR/comments.json" >/dev/null 2>&1; then
+if ! jq -e \
+  'type == "array"
+   and all(.[];
+     (type == "object")
+     and ((.user? | type) == "object")
+     and ((.user.login? | type) == "string")
+     and ((.body? | type) == "string"))' \
+  "$TEMP_DIR/comments.json" >/dev/null 2>&1; then
   echo "Issue comment history was malformed; refusing to write." >&2
   exit 4
 fi
