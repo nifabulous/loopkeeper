@@ -69,6 +69,11 @@ carried for pre-release behaviour.
   so a consumer repository cannot shadow trusted modules in a job holding write
   permission.
 - Manifest path confinement fails closed on unexpected errors.
+- The fork-eligibility job requests `issues: read`, and every caller grants it.
+  A reusable workflow may not request a permission its caller withheld, so a
+  caller without the scope fails the whole run at startup and produces no
+  review at all. A contract test now compares each caller's grant against every
+  job in the workflow it calls.
 - Package resources are read as content rather than as filesystem paths, which
   a zipimported install cannot provide.
 - The generic redactor declares the placeholders it substituted, and the prompt
