@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import io
 import json
-import urllib.error
-import urllib.request
 
 import pytest
 
@@ -11,7 +9,6 @@ from loopkeeper.errors import ConfigError  # noqa: F401
 from loopkeeper.model_binding import resolve_model  # noqa: F401
 from loopkeeper.transport import (
     ModelRequest,
-    ModelResponse,
     TransportConfig,
     TransportError,
     build_payload,

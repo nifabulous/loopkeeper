@@ -7,7 +7,11 @@ consumer default-branch SHA; a caller hint is diagnostic only. The reusable
 workflow accepts only immutable full-commit SHA pins and verifies both checked
 out commits before invoking adapters. Release provenance is generated after
 the immutable build and published as a separate artifact; the adapter never
-trusts a self-referential manifest from the checked-out tree.
+trusts a self-referential manifest from the checked-out tree. The release
+workflow keeps package construction and publication in separate jobs: the
+build job has only `contents: read`, while the human-gated publish job has
+`contents: read` plus the narrowly scoped `id-token: write` permission required
+for PyPI trusted publishing. The workflow does not consume a PyPI API token.
 
 Generic CI uses a caller-attested manifest. The protected key file is selected
 from `LOOPKEEPER_TRUST_KEY_FILE`, never from a manifest or untrusted artifact.

@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from loopkeeper.schema import parse_trailer, render_trailer, parse_history
-from loopkeeper.types import Trailer
 import loopkeeper.arbiter as arb
 
 LIVE_CAPTURE = Path(__file__).parents[2] / "tests" / "fixtures" / "relay-e834773" / "live_reviewer_capture.md"
@@ -83,7 +82,7 @@ def test_trailer_render_uses_loopkeeper_marker():
 
 
 def test_history_parse_accepts_valid_trailer():
-    trailer = _roundtrip(CANONICAL_COMMENT)
+    _roundtrip(CANONICAL_COMMENT)
     history = parse_history({
         "schema": 1,
         "repo": "example/project",

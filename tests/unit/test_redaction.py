@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -417,7 +416,6 @@ def test_sanitize_simple_string_without_redactor():
 def test_relay_adapter_placeholder_set_is_declared_and_tested():
     # Adapter should expose a declared placeholder set and its redact result
     # must only contain placeholders from that set.
-    from pathlib import Path as _P
     import importlib.util as _ilu
     adapter_path = Path(__file__).resolve().parents[2] / "adapters" / "relay" / "redactor.py"
     # Try alternative location inside src

@@ -15,7 +15,7 @@ import pytest
 
 from loopkeeper.attestation import AttestationVerifier, unsigned_manifest_digest, verify_caller_attestation
 from loopkeeper.errors import ManifestError, TrustError
-from loopkeeper.manifest import TrustedReader, validate_manifest, load_manifest
+from loopkeeper.manifest import validate_manifest, load_manifest
 from loopkeeper.paths import resolve_bounded_path
 
 

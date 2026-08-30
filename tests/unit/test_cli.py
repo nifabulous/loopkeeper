@@ -7,7 +7,6 @@ import hashlib
 import hmac
 import json
 import os
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -311,7 +310,5 @@ def test_output_paths_stay_under_requested_dir(tmp_path, monkeypatch):
     # Ensure only allowed files under tmp_path, no parent directory writes
     assert (tmp_path / "trailer.json").exists()
     assert (tmp_path / "review.md").exists()
-    # No file outside
-    parent_files = list(Path(tmp_path).parent.glob("review.md"))
     # At least ensure our tmp_path artifacts are confined
     assert (tmp_path / "review.md").read_text() is not None

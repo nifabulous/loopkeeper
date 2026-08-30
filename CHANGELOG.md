@@ -21,6 +21,10 @@ carried for pre-release behaviour.
 
 ### Added
 
+- **Release hardening.** CI now enforces the explicit Ruff baseline, and the
+  release workflow separates artifact construction from human-approved PyPI
+  publication using job-scoped OIDC trusted publishing with checksum and
+  provenance verification.
 - **Deterministic arbiter.** A pure decision function — no environment,
   filesystem, subprocess, network, or model access — that reads the history of
   review rounds and returns a disposition in first-match rule order:
