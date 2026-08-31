@@ -76,10 +76,14 @@ from a trusted package index and run `examples/ci/generic-review.sh` or
 
 ## Issue triage
 
-The issue examples follow the same split. The read-only caller requests
-`issues: read`; the posting caller requests `issues: write`. Issue comments use
-an issue-content fingerprint and authenticated bot author, so a changed issue
-revision is a new artifact and cannot reuse a PR review marker.
+The issue examples follow the same split. The read-only caller uses the
+`issue-triage-readonly.yml` reusable entrypoint and requests `issues: read`; the
+posting caller uses `issue-triage.yml` and requests `issues: write`. Keeping the
+write-capable entrypoint out of the read-only call is required because GitHub
+validates every job permission in a cross-repository reusable workflow before
+it evaluates a conditional writer. Issue comments use an issue-content
+fingerprint and authenticated bot author, so a changed issue revision is a new
+artifact and cannot reuse a PR review marker.
 
 ## Agent execution
 
