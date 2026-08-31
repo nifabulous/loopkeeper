@@ -107,6 +107,7 @@ FINGERPRINT="$(jq -c '{title: (.title // ""), body: (.body // "")}' <<<"$METADAT
 MARKER="<!-- loopkeeper-issue-triage:${ISSUE_NUMBER}:${FINGERPRINT} -->"
 
 if ! printf '%s\n' "$METADATA" | python3 -m loopkeeper.redaction \
+  --profile code-review \
   --metadata-file "$TEMP_DIR/redaction-issue.json" \
   >"$TEMP_DIR/issue.json" 2>/dev/null; then
   echo "Could not sanitize issue metadata; refusing to pass raw metadata to the model." >&2

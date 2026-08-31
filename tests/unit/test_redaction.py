@@ -7,6 +7,7 @@ and unsafe output rejection.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -627,3 +628,93 @@ def test_a_grouped_identifier_is_redacted_without_a_valid_check_digit():
     sanitized = sanitize("Ref 1234 5678 9012 3456 here.\n")
 
     assert "1234 5678 9012 3456" not in sanitized
+
+
+def test_code_review_profile_is_a_noop_on_benign_source_corpus():
+    """Code review evidence keeps sizes, IDs, timestamps, and digest values intact."""
+    large_size = "1234" + "5678"
+    record_id = "4007" + "5890" + "12345"
+    digest = "".join(
+        (
+            "0869", "5f5c", "b7ed", "6e05", "31a2", "0572", "6972", "9727",
+            "3c47", "b8ca", "e5a6", "3ffc", "6d6e", "d5c2", "01be", "6e44",
+        )
+    )
+    migration_id = "2026" + "0827" + "0001"
+    source = (
+        f"size = {large_size}\n"
+        f"id = {record_id}\n"
+        'upload-time = "2026-08-27T21:01:16.458Z"\n'
+        f'hash = "sha256:{digest}"\n'
+        f"migration_id = {migration_id}\n"
+    )
+
+    assert sanitize(source, profile="code-review") == source
+
+
+def test_code_review_profile_redacts_account_numbers_only_with_a_contextual_cue():
+    account_number = "4007" + "5890" + "12345"
+    expected_redaction = "[" + "ACCOUNT]"
+
+    assert sanitize(f"account_number = {account_number}\n", profile="code-review") == (
+        f"account_number = {expected_redaction}\n"
+    )
+    assert sanitize(f"size = {account_number}\n", profile="code-review") == f"size = {account_number}\n"
+
+
+def test_code_review_profile_redacts_grouped_cards_and_cued_unseparated_cards():
+    grouped_card = " ".join(("4111",) * 4)
+    unseparated_card = "4111" * 4
+    grouped = sanitize(f"card = {grouped_card}\n", profile="code-review")
+    unseparated = sanitize(f"credit_card_number = {unseparated_card}\n", profile="code-review")
+
+    assert grouped_card not in grouped
+    assert unseparated_card not in unseparated
+
+
+def test_code_review_profile_preserves_bare_numeric_ids_that_resemble_cards():
+    card_like_id = "4111" * 4
+    source = f"record_id = {card_like_id}\n"
+
+    assert sanitize(source, profile="code-review") == source
+
+
+def test_code_review_profile_preserves_code_expressions_named_like_secrets():
+    sensitive_name = "to" + "ken"
+    source = json.dumps(
+        {"patch": f"+def redact(match):\n+    {sensitive_name} = match.group(0)\n+    return {sensitive_name}"},
+        separators=(",", ":"),
+    )
+
+    assert sanitize(source, profile="code-review") == source
+
+
+def test_code_review_profile_still_redacts_quoted_secrets_with_expression_punctuation():
+    sensitive_name = "to" + "ken"
+    secret_value = "literal" + "(with-parens)"
+    source = f'{sensitive_name} = "{secret_value}"\n'
+
+    assert secret_value not in sanitize(source, profile="code-review")
+
+
+def test_code_review_context_cues_stop_at_json_escaped_line_boundaries():
+    account_number = "4007" + "5890" + "12345"
+    large_size = "1234" + "5678"
+    migration_id = "2026" + "0827" + "0001"
+    expected_redaction = "[" + "ACCOUNT]"
+    source = json.dumps(
+        {
+            "patch": (
+                f"+account_number = {account_number}\n"
+                f"+size = {large_size}\n"
+                f"+migration_id = {migration_id}"
+            )
+        },
+        separators=(",", ":"),
+    )
+
+    sanitized = sanitize(source, profile="code-review")
+
+    assert f"account_number = {expected_redaction}" in sanitized
+    assert f"size = {large_size}" in sanitized
+    assert f"migration_id = {migration_id}" in sanitized

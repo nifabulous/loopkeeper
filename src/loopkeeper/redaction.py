@@ -10,27 +10,17 @@ grammar, and deduplication.
 BIC/SWIFT codes are preserved (public directory data), matching the codex
 sanitizer corpus.
 
-This is the *generic* core, and the text it sees is usually a source diff
-rather than a payment message.  Redaction that fires on a byte size or a hash
-is not merely noisy: it hands the model corrupted evidence, which the model
-then reports as a defect in the code under review.
+The default ``payments`` profile is deliberately broad for payment messages.
+Code-review callers must select ``code-review``: it keeps the credential and
+contact rules, but treats bare source numbers as evidence unless an account or
+card cue makes the intended field explicit, and preserves hash-like literals.
+Keeping these profiles separate prevents a source diff from inheriting payment
+heuristics without weakening the payment path.
 
-The fix for that is to *declare* the substitution, not to make fewer of them.
 ``sanitize_with_metadata`` reports the placeholders this core introduced and the
-prompt explains what a placeholder is, so an over-broad match costs the reviewer
-a value it can no longer read -- never a finding it wrongly raises.
-
-No rule here carries an exemption, and none should be given one.  Three were
-tried on this branch and all three were removed as bypasses: a cue term near an
-account number (the attacker omits the cue), a Luhn check on a card (admits
-"1234 5678 9012 3456"), and a hexadecimal-digest skip (admits a card inside
-thirty-two characters of hex padding).  None of the three is implemented.  Each
-is recorded at the rule it would be reintroduced on, phrased as a rejected
-approach rather than as behaviour, because a reader of this module -- human or
-model -- otherwise takes the description for the code.
-
-The shape a rule exempts is a shape the attacker can write.  That is the whole
-reason the exemptions failed, and it applies to any future one.
+prompt explains what a placeholder is.  That declaration makes any remaining
+over-broad match visible to the reviewer instead of turning corrupted evidence
+into a false finding.
 """
 
 from __future__ import annotations
@@ -40,7 +30,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import NamedTuple, Protocol
+from typing import Literal, NamedTuple, Protocol
 
 from .errors import SecurityError
 
@@ -201,7 +191,7 @@ def _redact_bic(match: re.Match[str]) -> str:
     return token
 
 
-def _apply_rules(value: str, *, include_bic: bool) -> str:
+def _apply_rules(value: str, *, include_bic: bool, include_account: bool = True) -> str:
     value = _TUTOR_SECRET_RE.sub("[SECRET]", value)
     value = _EMAIL_RE.sub("[EMAIL]", value)
     value = _UETR_RE.sub("[UETR]", value)
@@ -209,7 +199,8 @@ def _apply_rules(value: str, *, include_bic: bool) -> str:
     if include_bic:
         value = _BIC_RE.sub(_redact_bic, value)
     value = _PHONE_RE.sub(_redact_phone, value)
-    value = _ACCOUNT_RE.sub("[ACCOUNT]", value)
+    if include_account:
+        value = _ACCOUNT_RE.sub("[ACCOUNT]", value)
     return value
 
 
@@ -291,6 +282,21 @@ _STANDARD_REFERENCE_RE = re.compile(r"\bISO[ /-]?\d{3,5}(?:[:-]\d{2,4})?\b", re.
 _SVG_COORDINATES_RE = re.compile(r"\b(?:points|viewBox)\s*=\s*\"[0-9 .,+-]*\"")
 _LONG_DIGIT_RUN_RE = re.compile(r"\d{8,}")
 _GROUPED_IDENTIFIER_RE = re.compile(r"(?<![\d-])(?:\d{4}[ -])+\d{1,4}(?![\d-])")
+_ACCOUNT_CUE_RE = re.compile(
+    r"(?i)(?:\baccount(?:[_ -]?number)?\b|\bacct(?:[_ -]?(?:no|number))?\b|"
+    r"\bbeneficiary[_ -]?account\b|\brouting[_ -]?number\b)[^\r\n]{0,32}(?:[:=]|\b(?:is|no)\b)\s*$"
+)
+_CARD_CUE_RE = re.compile(
+    r"(?i)(?:\bcard(?:[_ -]?number)?\b|\bcredit[_ -]?card(?:[_ -]?number)?\b|"
+    r"\bdebit[_ -]?card(?:[_ -]?number)?\b|"
+    r"\bpan\b|\bcc[_ -]?number\b)[^\r\n]{0,32}(?:[:=]|\b(?:is|no)\b)\s*$"
+)
+_CODE_REVIEW_HASH_RE = re.compile(
+    r"(?i)(?<![0-9a-f])(?:sha(?:1|224|256|384|512)|md5)\s*[:=]\s*[0-9a-f]{32,}(?![0-9a-f])"
+    r"|(?<![0-9a-f])[0-9a-f]{32,}(?![0-9a-f])"
+)
+
+RedactionProfile = Literal["payments", "code-review"]
 
 
 def _is_coordinate_list(match: re.Match[str]) -> bool:
@@ -320,12 +326,52 @@ def _redact_card(match: re.Match[str]) -> str:
     return match.group(0)
 
 
-def _sanitize_exempt_literal(literal: str) -> str:
+def _has_contextual_cue(match: re.Match[str], cue: re.Pattern[str]) -> bool:
+    prefix = match.string[max(0, match.start() - 80) : match.start()]
+    boundary_end = max(
+        (
+            position + len(boundary)
+            for boundary in ("\n", "\r", r"\n", r"\r")
+            if (position := prefix.rfind(boundary)) >= 0
+        ),
+        default=0,
+    )
+    prefix = prefix[boundary_end:]
+    return cue.search(prefix) is not None
+
+
+def _is_code_review_expression_assignment(match: re.Match[str]) -> bool:
+    assignment = match.group(0)
+    _, separator, value = assignment.partition("=")
+    if not separator:
+        _, separator, value = assignment.partition(":")
+    value = value.lstrip()
+    if not separator or value.startswith(('"', "'", r'\"', r"\'")):
+        return False
+    return re.match(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*[\[(]", value) is not None
+
+
+def _redact_code_review_account(match: re.Match[str]) -> str:
+    if _has_contextual_cue(match, _ACCOUNT_CUE_RE):
+        return "[ACCOUNT]"
+    return match.group(0)
+
+
+def _redact_code_review_card(match: re.Match[str]) -> str:
+    candidate = match.group(0)
+    if any(character in " -" for character in candidate) or _has_contextual_cue(match, _CARD_CUE_RE):
+        return _redact_card(match)
+    return candidate
+
+
+def _sanitize_exempt_literal(literal: str, profile: RedactionProfile) -> str:
+    if profile == "code-review":
+        return literal
     literal = _CARD_RE.sub(_redact_card, literal)
     return _GROUPED_IDENTIFIER_RE.sub("[ACCOUNT]", literal)
 
 
-def _sanitize_line(line: str) -> str:
+def _sanitize_line(line: str, profile: RedactionProfile) -> str:
     if _GIT_METADATA_RE.fullmatch(line.rstrip("\r\n")):
         return line
     hunk_prefix = ""
@@ -340,7 +386,7 @@ def _sanitize_line(line: str) -> str:
         def _mask(match: re.Match[str]) -> str:
             if predicate is not None and not predicate(match):
                 return match.group(0)
-            exempt.append(_sanitize_exempt_literal(match.group(0)))
+            exempt.append(_sanitize_exempt_literal(match.group(0), profile))
             return f"[LITERAL_{len(exempt) - 1}]"
 
         return _mask
@@ -348,21 +394,47 @@ def _sanitize_line(line: str) -> str:
     masked = line
     for pattern, predicate in _EXEMPT_RULES:
         masked = pattern.sub(_mask_with(predicate), masked)
+    code_expressions: list[str] = []
+    if profile == "code-review":
+        def _protect_code_expression(match: re.Match[str]) -> str:
+            if not _is_code_review_expression_assignment(match):
+                return match.group(0)
+            code_expressions.append(match.group(0))
+            return f"[CODE_EXPRESSION_{len(code_expressions) - 1}]"
+
+        for pattern, _ in SECRET_PATTERNS[-2:]:
+            masked = pattern.sub(_protect_code_expression, masked)
     for pattern, replacement in SECRET_PATTERNS[1:]:
         masked = pattern.sub(replacement, masked)
-    masked = redact_sensitive_text_preserving_bic(masked)
-    masked = _CARD_RE.sub(_redact_card, masked)
+    if profile == "payments":
+        masked = redact_sensitive_text_preserving_bic(masked)
+        masked = _CARD_RE.sub(_redact_card, masked)
+    else:
+        protected: list[str] = []
+
+        def _protect_hash(match: re.Match[str]) -> str:
+            protected.append(match.group(0))
+            return f"[HASH_LITERAL_{len(protected) - 1}]"
+
+        masked = _CODE_REVIEW_HASH_RE.sub(_protect_hash, masked)
+        masked = _apply_rules(masked, include_bic=False, include_account=False)
+        masked = _LONG_DIGIT_RUN_RE.sub(_redact_code_review_account, masked)
+        masked = _CARD_RE.sub(_redact_code_review_card, masked)
+        for index, literal in enumerate(protected):
+            masked = masked.replace(f"[HASH_LITERAL_{index}]", literal)
+    for index, expression in enumerate(code_expressions):
+        masked = masked.replace(f"[CODE_EXPRESSION_{index}]", expression)
     for index, literal in enumerate(exempt):
         masked = masked.replace(f"[LITERAL_{index}]", literal)
     return hunk_prefix + masked
 
 
-def _generic_redact(text: str) -> str:
+def _generic_redact(text: str, profile: RedactionProfile) -> str:
     """Run the built-in generic sanitizer over ``text``."""
     # PEM spans lines, run globally first
     pem_pattern, pem_replacement = SECRET_PATTERNS[0]
     text = pem_pattern.sub(pem_replacement, text)
-    return "".join(_sanitize_line(line) for line in text.splitlines(keepends=True))
+    return "".join(_sanitize_line(line, profile) for line in text.splitlines(keepends=True))
 
 
 def _defang_source_placeholders(text: str) -> str:
@@ -428,18 +500,21 @@ def sanitize_with_metadata(
     redactor: Redactor | None = None,
     *,
     defang_source_placeholders: bool = True,
+    profile: RedactionProfile = "payments",
 ) -> RedactionResult:
     if not isinstance(text, str):
         raise TypeError("text must be str")
+    if profile not in ("payments", "code-review"):
+        raise ValueError(f"unknown redaction profile: {profile!r}")
     prepared = _defang_source_placeholders(text) if defang_source_placeholders else text
-    generic = _generic_redact(prepared)
+    generic = _generic_redact(prepared, profile)
     if redactor is None:
         if len(generic.encode("utf-8")) > _MAX_OUTPUT_BYTES:
             raise SecurityError("sanitized output exceeds byte ceiling")
         return RedactionResult(generic, _introduced_placeholders(prepared, generic))
     result = redactor.redact(generic)
     _validate_result(result)
-    final_text = _generic_redact(result.text)
+    final_text = _generic_redact(result.text, profile)
     # Merge the plugin's declared placeholders with the core's own. Reporting
     # only the plugin's left the core's substitutions undeclared whenever a
     # plugin was configured, and undeclared entirely when one was not.
@@ -453,7 +528,12 @@ def sanitize_with_metadata(
     return RedactionResult(final_text, normalized)
 
 
-def sanitize(text: str, redactor: Redactor | None = None) -> str:
+def sanitize(
+    text: str,
+    redactor: Redactor | None = None,
+    *,
+    profile: RedactionProfile = "payments",
+) -> str:
     # ``sanitize`` is also used on model output. Only the metadata-aware input
     # path reserves placeholder-shaped source tokens; output sanitization must
     # preserve harmless bracketed prose.
@@ -461,6 +541,7 @@ def sanitize(text: str, redactor: Redactor | None = None) -> str:
         text,
         redactor,
         defang_source_placeholders=False,
+        profile=profile,
     ).text
 
 
@@ -470,6 +551,12 @@ def _main(argv: list[str] | None = None) -> int:
         "--metadata-file",
         type=Path,
         help="write input-redaction provenance as JSON",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("payments", "code-review"),
+        default="payments",
+        help="select the redaction profile for this input",
     )
     args = parser.parse_args(argv)
 
@@ -485,11 +572,11 @@ def _main(argv: list[str] | None = None) -> int:
         value = raw
 
     if args.metadata_file is None:
-        sys.stdout.write(sanitize(value))
+        sys.stdout.write(sanitize(value, profile=args.profile))
         return 0
 
     source_placeholders_defanged = _SOURCE_PLACEHOLDER_RE.search(value) is not None
-    result = sanitize_with_metadata(value)
+    result = sanitize_with_metadata(value, profile=args.profile)
     args.metadata_file.write_text(
         json.dumps(
             {

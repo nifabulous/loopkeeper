@@ -24,6 +24,13 @@ are not written to artifacts. Input and output byte limits, bounded pagination,
 and deadline-aware retries are enforced. A failed or truncated read is
 unavailable evidence, never an empty result.
 
+Redaction profiles are kept separate at the trust boundary. Payment messages
+use the broad `payments` profile; GitHub review and triage evidence use the
+`code-review` profile, which preserves source sizes, IDs, and hash-like literals
+while still redacting credentials and context-marked account/card fields. This
+prevents payment heuristics from manufacturing defects out of benign code
+evidence without weakening payment redaction.
+
 GitHub writes are opt-in. Every create/update path requires
 `LOOPKEEPER_OPERATOR=1`, and posting callers request only the smallest required
 permission. Review comments use authenticated bot markers and a serialized

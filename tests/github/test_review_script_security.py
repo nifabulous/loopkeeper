@@ -116,6 +116,12 @@ def test_review_script_carries_redaction_metadata_into_the_prompt():
     assert "render_redaction_guidance" in source
 
 
+def test_review_script_uses_code_review_redaction_for_untrusted_evidence():
+    source = REVIEW.read_text(encoding="utf-8")
+
+    assert source.count("--profile code-review") == 4
+
+
 def test_workflow_run_ci_replaces_fallback_for_same_head():
     """Exact-head CI evidence replaces a fallback comment in place."""
     existing = [

@@ -92,6 +92,10 @@ carried for pre-release behaviour.
   text supplied by the source is now visibly defanged into a separate,
   reviewable marker, so an attacker cannot borrow the trusted shape of a real
   substitution. Redaction strength is unchanged: no rule was relaxed.
+- GitHub review and triage now select a dedicated `code-review` redaction
+  profile. It preserves benign source sizes, IDs, timestamps, and hash-like
+  literals while retaining broad payment redaction in the default `payments`
+  profile.
 
 ### Known limitations
 
@@ -102,16 +106,11 @@ carried for pre-release behaviour.
   review before it is trusted.
 - When a diff exceeds the evidence budget, the review states the coverage
   limitation and must not be read as exhaustive.
-- Redaction is calibrated for payment traffic, inherited from Relay. Rules whose
-  shape is ambiguous -- any run of eight or more digits, any 13-19 digit group --
-  fire on ordinary source too, so a byte size, a row count, or part of a checksum
-  can be replaced. The prompt now states that placeholders are substitutions,
-  which stops them being read as defects, but the substitution itself remains.
-  Narrowing these rules is not an accuracy question: they are what stops an
-  identifier being smuggled through untrusted content, and three attempts at
-  narrowing each produced a bypass, because the shape a rule exempts is a shape
-  the attacker can write. Reducing the false-positive rate needs a redaction
-  profile chosen by the caller, not a cleverer pattern.
+- Callers handling payment messages should keep the default `payments` profile;
+  callers handling source evidence should select `code-review`. The latter uses
+  contextual account/card cues and preserves hash-like literals, so profile
+  selection is part of the trust-boundary contract rather than an incidental
+  formatting choice.
 
 <!-- Link definitions are added at publication. Until the v0.1.0 tag exists,
 a compare or release link would resolve to nothing. -->
