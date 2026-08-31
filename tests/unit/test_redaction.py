@@ -627,3 +627,39 @@ def test_a_grouped_identifier_is_redacted_without_a_valid_check_digit():
     sanitized = sanitize("Ref 1234 5678 9012 3456 here.\n")
 
     assert "1234 5678 9012 3456" not in sanitized
+
+
+def test_code_review_profile_is_a_noop_on_benign_source_corpus():
+    """Code review evidence keeps sizes, IDs, timestamps, and digest values intact."""
+    source = (
+        'size = 12345678\n'
+        'id = 4007589012345\n'
+        'upload-time = "2026-08-27T21:01:16.458Z"\n'
+        'hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"\n'
+        'migration_id = 202608270001\n'
+    )
+
+    assert sanitize(source, profile="code-review") == source
+
+
+def test_code_review_profile_redacts_account_numbers_only_with_a_contextual_cue():
+    assert sanitize("account_number = 4007589012345\n", profile="code-review") == (
+        "account_number = [ACCOUNT]\n"
+    )
+    assert sanitize("size = 4007589012345\n", profile="code-review") == (
+        "size = 4007589012345\n"
+    )
+
+
+def test_code_review_profile_redacts_grouped_cards_and_cued_unseparated_cards():
+    grouped = sanitize("card = 4111 1111 1111 1111\n", profile="code-review")
+    unseparated = sanitize("credit_card_number = 4111111111111111\n", profile="code-review")
+
+    assert "4111 1111 1111 1111" not in grouped
+    assert "4111111111111111" not in unseparated
+
+
+def test_code_review_profile_preserves_bare_numeric_ids_that_resemble_cards():
+    source = "record_id = 4111111111111111\n"
+
+    assert sanitize(source, profile="code-review") == source

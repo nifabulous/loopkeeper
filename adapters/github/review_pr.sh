@@ -457,6 +457,7 @@ else
   printf '(no previous review)\n' >"$TEMP_DIR/prev-review.md"
 fi
 if ! python3 -m loopkeeper.redaction \
+  --profile code-review \
   --metadata-file "$TEMP_DIR/redaction-prev-review.json" \
   <"$TEMP_DIR/prev-review.md" >"$TEMP_DIR/prev-review-sanitized.md" 2>/dev/null; then
   echo "Could not sanitize the previous review; refusing to pass raw history to the model." >&2
@@ -465,6 +466,7 @@ fi
 
 # Collect and sanitize metadata/file changes before wrapping as untrusted.
 if ! printf '%s\n' "$METADATA" | python3 -m loopkeeper.redaction \
+  --profile code-review \
   --metadata-file "$TEMP_DIR/redaction-metadata.json" \
   >"$TEMP_DIR/metadata.json" 2>/dev/null; then
   echo "Could not sanitize PR metadata; refusing to pass raw metadata to the model." >&2
@@ -562,6 +564,7 @@ if ! jq -s --argjson files_truncated "$PR_FILES_TRUNCATED" \
   '{format: "github-pull-request-files-v1", files: ., files_truncated: ($files_truncated == 1)}' "$TEMP_DIR/pr-files.jsonl" \
   | capture_bounded_stream "$LOOPKEEPER_MAX_INPUT_BYTES" "pull-request file changes" \
   | python3 -m loopkeeper.redaction \
+      --profile code-review \
       --metadata-file "$TEMP_DIR/redaction-diff.json" \
       >"$TEMP_DIR/pr.diff" 2>/dev/null; then
   echo "Could not sanitize the bounded pull-request file changes; refusing to pass raw diff to the model." >&2
@@ -704,6 +707,7 @@ else
   fi
 fi
 if ! python3 -m loopkeeper.redaction \
+  --profile code-review \
   --metadata-file "$TEMP_DIR/redaction-verification.json" \
   <"$TEMP_DIR/verification-results.txt" \
   >"$TEMP_DIR/verification-results-sanitized.txt" 2>/dev/null; then

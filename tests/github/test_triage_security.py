@@ -339,3 +339,9 @@ def test_triage_never_calls_git_show_after_failed_trust_guard(tmp_path):
         assert _git_show_calls(invocations) == [], kwargs
         assert _model_calls(invocations) == [], kwargs
         assert _write_calls(invocations) == [], kwargs
+
+
+def test_triage_uses_code_review_redaction_for_issue_evidence():
+    source = TRIAGE.read_text(encoding="utf-8")
+
+    assert source.count("--profile code-review") == 1

@@ -226,8 +226,8 @@ def _cmd_review(args: argparse.Namespace) -> int:
     if metadata_text is None or diff_text is None:
         raise ConfigError("review manifest references unreadable untrusted artifacts")
 
-    metadata_result = sanitize_with_metadata(metadata_text)
-    diff_result = sanitize_with_metadata(diff_text)
+    metadata_result = sanitize_with_metadata(metadata_text, profile="code-review")
+    diff_result = sanitize_with_metadata(diff_text, profile="code-review")
     metadata_text = metadata_result.text
     diff_text = diff_result.text
     placeholders = tuple(dict.fromkeys(metadata_result.placeholders + diff_result.placeholders))
@@ -375,7 +375,7 @@ def _cmd_triage(args: argparse.Namespace) -> int:
     metadata_text = _read_untrusted_file(untrusted_root, metadata_rel, 100000)
     if metadata_text is None:
         raise ConfigError("triage metadata is unreadable")
-    metadata_result = sanitize_with_metadata(metadata_text)
+    metadata_result = sanitize_with_metadata(metadata_text, profile="code-review")
     instructions = render_review_prompt(
         policy,
         RedactionResult("safe", metadata_result.placeholders),
