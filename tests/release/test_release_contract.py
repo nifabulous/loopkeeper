@@ -30,6 +30,17 @@ def test_runtime_dependencies_are_empty():
     assert _project()["dependencies"] == []
 
 
+def test_ci_enforces_explicit_ruff_baseline():
+    project = _project()
+    ruff = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8")).get("tool", {}).get("ruff", {})
+    assert project["optional-dependencies"]["dev"]
+    assert ruff["target-version"] == "py310"
+    assert ruff["line-length"] == 120
+    assert ruff["lint"]["select"] == ["E4", "E7", "E9", "F"]
+    raw = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "python -m ruff check src tests" in raw
+
+
 def test_all_workflow_refs_are_full_sha_pinned():
     refs = _workflow_refs(ROOT / ".github/workflows") + _workflow_refs(ROOT / "examples/github")
     assert refs
@@ -80,10 +91,35 @@ def test_sdist_excludes_attestation_key_fixture():
 
 def test_release_workflow_publishes_package_and_provenance():
     raw = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    assert "python -m twine upload dist/*.whl dist/*.tar.gz" in raw
     assert "actions/upload-artifact@" in raw
     assert "release-manifest.json" in raw
     assert "sha256sum" in raw
+
+
+def test_release_workflow_uses_job_scoped_oidc_trusted_publishing():
+    raw = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    publish = raw.split("\n  publish:\n", 1)[1]
+    top_level = raw.split("jobs:", 1)[0]
+
+    assert "if: ${{ inputs.publish }}" in publish
+    assert "needs: build" in publish
+    assert "permissions:\n      contents: read\n      id-token: write" in publish
+    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in publish
+    assert "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33" in publish
+    assert "TWINE_PASSWORD" not in raw
+    assert "twine upload" not in raw
+    assert "id-token: write" not in top_level
+
+
+def test_release_workflow_verifies_commit_and_artifact_bindings_before_publish():
+    raw = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    publish = raw.split("\n  publish:\n", 1)[1]
+
+    assert "ref: ${{ github.sha }}" in publish
+    assert "persist-credentials: false" in publish
+    assert "EXPECTED_COMMIT: ${{ github.sha }}" in publish
+    assert "python3 release/verify_artifact.py dist \"$EXPECTED_COMMIT\"" in publish
+    assert '"artifacts": artifacts' in raw
 
 
 def test_release_tree_contains_no_fixture_secret():

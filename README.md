@@ -46,6 +46,10 @@ The trust model, release process, and staged dogfood gates are documented in
 [`docs/security.md`](docs/security.md), [`docs/release.md`](docs/release.md),
 and [`docs/dogfood-runbook.md`](docs/dogfood-runbook.md).
 
+Releases are built with read-only permissions and published only after an
+explicit `publish: true` approval through PyPI trusted publishing; no package
+API token is required.
+
 ## Source ledger
 
 See [`docs/source-ledger.md`](docs/source-ledger.md) for the 30-row source map

@@ -10,12 +10,22 @@ package and must be retained with the release provenance; it is deliberately
 generated outside the source checkout because a file cannot cryptographically
 bind its own final commit SHA.
 
-The release workflow has two phases. Phase 1 publishes the provider-neutral
-package and provenance without GitHub write permissions. Phase 2 publishes the
-reusable workflows from the same reviewed tag only after the adapter, workflow,
-read-only dogfood, and disposable posting gates pass. A human approval is
-required before publication; the first release also requires a manual check of
-package ownership and the reusable-workflow repository namespace.
+The release workflow has two phases. The `build` job creates the provider-neutral
+package and provenance, runs the automation checks, and uploads one immutable
+artifact containing both package files and their evidence. It has only
+`contents: read`. The optional `publish` job runs only when a human dispatches
+the workflow with `publish: true`; it downloads that exact artifact, verifies
+the checksum file, reviewed commit, manifest schema, package filenames, and
+per-file digests with `release/verify_artifact.py`, and publishes to PyPI with
+the `pypa/gh-action-pypi-publish` action. Only this job has `id-token: write`,
+and no PyPI API token or `twine upload` is used.
+
+Before the first publication, configure a PyPI trusted publisher for the exact
+GitHub owner, repository, workflow filename (`.github/workflows/release.yml`),
+and, if the PyPI publisher is configured with one, the GitHub environment name.
+The workflow's `publish` input is the human approval gate; the first release
+also requires a manual check of package ownership and the reusable-workflow
+repository namespace.
 
 Consumer examples are templates until their fixture slug and full SHA are
 replaced. A publishable copy must use a full immutable workflow SHA, keep the

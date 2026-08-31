@@ -7,7 +7,6 @@ from pathlib import PurePosixPath
 import pytest
 
 from loopkeeper.contract import contract_relative_path, load_contract_or_empty, parse_contract
-from loopkeeper.types import TrustedReader
 
 
 def test_contract_relative_path_slash_replacement():
@@ -137,7 +136,6 @@ def test_load_contract_or_empty_valid_returns_contract():
 def test_load_contract_or_empty_uses_reader_bound_to_verified_default_branch():
     # Reader must not open arbitrary paths — ensure loader uses derived path
     branch = "feat/x"
-    correct_path = str(contract_relative_path(branch))
     wrong_path = "docs/contracts/wrong.md"
     reader = InMemoryReader({wrong_path: "# Contract: feat/x\n"})
     contract = load_contract_or_empty(reader, branch)

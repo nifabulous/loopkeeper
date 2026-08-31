@@ -6,7 +6,6 @@ Keeps vocabulary exactly: MERGE-CLEAN, MERGE-WITH-GAPS, ESCALATE-TO-SCOPING, CON
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -709,8 +708,6 @@ def test_duplicate_round_ids_is_needs_human():
 
 def test_repeated_resolved_finding_is_needs_human():
     # Use History dataclass via schema to trigger repeated RESOLVED
-    from loopkeeper.schema import parse_history
-    from loopkeeper.errors import SchemaError
     # Build history via parse_history that has repeated RESOLVED
     # If parse_history raises, that counts as fail-closed handling before decide
     # Instead test decide with dict that re-emits RESOLVED

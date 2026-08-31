@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from loopkeeper.agent_definitions import AgentDefinition, load_definition
-from loopkeeper.agent import AgentConfig, AgentRequest, AgentResult, run_agent
+from loopkeeper.agent import AgentConfig, AgentRequest, run_agent
 from loopkeeper.errors import ConfigError, SecurityError, TrustError
 from loopkeeper.transport import TransportConfig, ModelResponse
 
@@ -255,7 +255,7 @@ def test_definition_body_is_trusted_and_task_is_user_input(fake_transport, tmp_p
     config = AgentConfig(model="test-model", transport=transport, max_input_bytes=80000, max_output_tokens=8000, max_output_bytes=32000)
 
     # Need to ensure model binding not needed here
-    result = run_agent(
+    run_agent(
         AgentRequest(manifest=manifest, agent_name="domain-researcher", task_text="untrusted task", trusted_reader=reader),
         config,
     )
@@ -345,7 +345,6 @@ def test_definition_parse_errors_and_oversize_bodies_fail_closed(definition_text
 # ---------------------------------------------------------------------------
 
 def test_all_five_definitions_parse(tmp_path):
-    from loopkeeper.resources.agents import __name__ as _unused
     # Load each of the five example definitions via the real resources dir
     # Use package resources path
     pkg_root = Path(__file__).parents[2] / "src" / "loopkeeper" / "resources"

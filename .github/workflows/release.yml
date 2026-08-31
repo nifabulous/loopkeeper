@@ -25,7 +25,7 @@ jobs:
           PYTHONPATH: src
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip build twine
+          python -m pip install --upgrade pip build
           python -m build --sdist --wheel
           sha256sum dist/*.whl dist/*.tar.gz > dist/SHA256SUMS
           git rev-parse HEAD > dist/COMMIT_SHA
@@ -37,13 +37,21 @@ jobs:
           wheels = sorted(Path("dist").glob("*.whl"))
           if len(wheels) != 1:
               raise SystemExit("release must contain exactly one wheel")
+          sdists = sorted(Path("dist").glob("*.tar.gz"))
+          if len(sdists) != 1:
+              raise SystemExit("release must contain exactly one sdist")
           digest = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
           commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          artifacts = [
+              {"filename": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+              for path in [*wheels, *sdists]
+          ]
           manifest = {
               "schema": 1,
               "version": __version__,
               "commit_sha": commit,
               "package_sha256": digest,
+              "artifacts": artifacts,
               "workflow_paths": [
                   ".github/workflows/pr-review.yml",
                   ".github/workflows/pr-review-posting.yml",
@@ -67,9 +75,33 @@ jobs:
             dist/release-manifest.json
           if-no-files-found: error
           retention-days: 30
-      - name: Publish package (human-approved phase 1)
-        if: ${{ inputs.publish }}
+
+  publish:
+    if: ${{ inputs.publish }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download package and provenance
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: loopkeeper-release-${{ github.run_id }}
+          path: dist
+      - name: Verify release artifact before publication
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: python -m twine upload dist/*.whl dist/*.tar.gz
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test -s dist/SHA256SUMS
+          sha256sum --check --strict dist/SHA256SUMS
+          python3 release/verify_artifact.py dist "$EXPECTED_COMMIT"
+      - name: Publish package with PyPI trusted publishing
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/
