@@ -102,7 +102,12 @@ jobs:
           test -s dist/SHA256SUMS
           sha256sum --check --strict dist/SHA256SUMS
           python3 release/verify_artifact.py dist "$EXPECTED_COMMIT"
+      - name: Stage package distributions for publication
+        run: |
+          set -euo pipefail
+          mkdir -p publish-dist
+          cp dist/*.whl dist/*.tar.gz publish-dist/
       - name: Publish package with PyPI trusted publishing
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
-          packages-dir: dist/
+          packages-dir: publish-dist/

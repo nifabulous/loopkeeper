@@ -122,6 +122,15 @@ def test_release_workflow_verifies_commit_and_artifact_bindings_before_publish()
     assert '"artifacts": artifacts' in raw
 
 
+def test_release_workflow_publishes_only_distribution_files():
+    raw = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    publish = raw.split("\n  publish:\n", 1)[1]
+
+    assert "mkdir -p publish-dist" in publish
+    assert "cp dist/*.whl dist/*.tar.gz publish-dist/" in publish
+    assert "packages-dir: publish-dist/" in publish
+
+
 def test_release_tree_contains_no_fixture_secret():
     for path in ROOT.rglob("*"):
         if not path.is_file() or ".git" in path.parts or "tests" in path.parts or "test_release_contract.py" in path.name:
