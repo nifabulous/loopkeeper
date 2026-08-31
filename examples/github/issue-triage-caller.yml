@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   triage:
-    uses: example-org/loopkeeper/.github/workflows/issue-triage.yml@0123456789abcdef0123456789abcdef01234567
+    uses: example-org/loopkeeper/.github/workflows/issue-triage-readonly.yml@0123456789abcdef0123456789abcdef01234567
     with:
       consumer_repo: ${{ github.repository }}
       loopkeeper_repo: example-org/loopkeeper

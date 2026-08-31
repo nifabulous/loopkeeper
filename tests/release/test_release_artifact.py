@@ -38,6 +38,7 @@ def _write_release_fixture(tmp_path: Path) -> Path:
                     ".github/workflows/pr-review.yml",
                     ".github/workflows/pr-review-posting.yml",
                     ".github/workflows/issue-triage.yml",
+                    ".github/workflows/issue-triage-readonly.yml",
                     ".github/workflows/agent.yml",
                 ],
                 "provenance": {"source": "Loopkeeper release pipeline", "builder": "GitHub Actions"},

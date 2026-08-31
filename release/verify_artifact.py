@@ -20,6 +20,7 @@ _WORKFLOW_PATHS = [
     ".github/workflows/pr-review.yml",
     ".github/workflows/pr-review-posting.yml",
     ".github/workflows/issue-triage.yml",
+    ".github/workflows/issue-triage-readonly.yml",
     ".github/workflows/agent.yml",
 ]
 _MANIFEST_KEYS = {

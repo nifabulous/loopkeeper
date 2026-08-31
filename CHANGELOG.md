@@ -60,6 +60,8 @@ carried for pre-release behaviour.
   fallback evidence is replaced in place by exact-head CI evidence, duplicates
   are rewritten as superseded rather than deleted, and the head is re-read
   immediately before publication.
+  Read-only issue triage has its own reusable entrypoint so cross-repository
+  callers never load a write-capable job during artifact-only runs.
 - **Headless agent runner** with five trusted agent definitions.
 - **Zero runtime dependencies.** Pure standard library, Python 3.10–3.12.
 
@@ -74,10 +76,10 @@ carried for pre-release behaviour.
   permission.
 - Manifest path confinement fails closed on unexpected errors.
 - The fork-eligibility job requests `issues: read`, and every caller grants it.
-  A reusable workflow may not request a permission its caller withheld, so a
-  caller without the scope fails the whole run at startup and produces no
-  review at all. A contract test now compares each caller's grant against every
-  job in the workflow it calls.
+  The read-only issue-triage entrypoint contains no writer job; posting uses a
+  separate write-capable entrypoint. This avoids GitHub rejecting an
+  artifact-only cross-repository call at startup while preserving the
+  least-privilege boundary.
 - Package resources are read as content rather than as filesystem paths, which
   a zipimported install cannot provide.
 - The account rule no longer requires word boundaries. `\b\d{8,}\b` never

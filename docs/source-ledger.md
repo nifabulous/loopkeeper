@@ -41,4 +41,10 @@ workflow-name/file resolution and trigger sequencing tests.
 
 These 30 rows sum to 10801 source lines at `e834773`.
 
+The issue-triage entrypoint is now split at the workflow boundary: the
+write-capable `issue-triage.yml` remains the posting entrypoint, while
+`issue-triage-readonly.yml` contains only the read-only resolve and triage jobs.
+This prevents GitHub's cross-repository reusable-workflow validation from
+loading an `issues: write` job for artifact-only callers.
+
 **Exclusion:** The Relay consumer workflow `.github/workflows/ci.yml` (with `name: CI` and path `ci.yml`) is explicitly excluded from the extraction. It is not copied into the Loopkeeper package; it remains consumer-owned and is used only as a test fixture to prove that GitHub trigger names are resolved to workflow IDs before the discovery probe queries a file/path. No `ci.yml` from the consumer is bundled into the reusable project.

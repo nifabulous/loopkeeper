@@ -1,0 +1,156 @@
+name: Loopkeeper Issue Triage (read-only reusable)
+
+on:
+  workflow_call:
+    inputs:
+      consumer_repo:
+        type: string
+        required: true
+      loopkeeper_repo:
+        type: string
+        required: true
+      consumer_trusted_sha:
+        type: string
+        required: false
+        default: ""
+      loopkeeper_sha:
+        type: string
+        required: true
+      job_timeout_seconds:
+        type: number
+        required: false
+        default: 1200
+      post_comments:
+        type: boolean
+        required: false
+        default: false
+      issue_number:
+        type: number
+        required: true
+      policy_path:
+        type: string
+        required: false
+        default: ".github/codex/review-policy.md"
+    secrets:
+      model_api_key:
+        required: true
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      consumer_trusted_sha: ${{ steps.roots.outputs.consumer_trusted_sha }}
+      consumer_default_branch: ${{ steps.roots.outputs.consumer_default_branch }}
+    steps:
+      - name: Resolve immutable inputs and consumer trust root
+        id: roots
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONSUMER_REPO: ${{ inputs.consumer_repo }}
+          LOOPKEEPER_REPO: ${{ inputs.loopkeeper_repo }}
+          CONSUMER_TRUSTED_HINT: ${{ inputs.consumer_trusted_sha }}
+          LOOPKEEPER_SHA: ${{ inputs.loopkeeper_sha }}
+          JOB_TIMEOUT_SECONDS: ${{ inputs.job_timeout_seconds }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CONSUMER_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "consumer_repo must be owner/name" >&2; exit 2; }
+          [[ "$LOOPKEEPER_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "loopkeeper_repo must be owner/name" >&2; exit 2; }
+          [[ "$LOOPKEEPER_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "loopkeeper_sha must be a full lowercase SHA" >&2; exit 2; }
+          [[ "$JOB_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || { echo "job_timeout_seconds must be positive" >&2; exit 2; }
+          default_branch="$(gh api "repos/${CONSUMER_REPO}" --jq '.default_branch')"
+          [[ "$default_branch" =~ ^[A-Za-z0-9._/-]+$ && "$default_branch" != /* && "$default_branch" != *..* ]] || { echo "forge returned an unsafe default branch" >&2; exit 4; }
+          consumer_sha="$(gh api "repos/${CONSUMER_REPO}/git/ref/heads/${default_branch}" --jq '.object.sha')"
+          [[ "$consumer_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "forge did not return a full consumer SHA" >&2; exit 4; }
+          if [[ -n "$CONSUMER_TRUSTED_HINT" && "$CONSUMER_TRUSTED_HINT" != "$consumer_sha" ]]; then echo "consumer_trusted_sha hint differs from forge tip; using forge tip" >&2; fi
+          echo "consumer_trusted_sha=$consumer_sha" >>"$GITHUB_OUTPUT"
+          echo "consumer_default_branch=$default_branch" >>"$GITHUB_OUTPUT"
+
+  triage:
+    needs: resolve
+    outputs:
+      artifact_available: ${{ steps.artifact_status.outputs.available }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: loopkeeper-issue-triage-${{ inputs.consumer_repo }}-${{ inputs.issue_number }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out consumer at forge-verified default-branch SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.consumer_repo }}
+          ref: ${{ needs.resolve.outputs.consumer_trusted_sha }}
+          path: consumer
+          fetch-depth: 1
+      - name: Check out Loopkeeper at immutable release SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.loopkeeper_repo }}
+          ref: ${{ inputs.loopkeeper_sha }}
+          path: loopkeeper
+          fetch-depth: 1
+      - name: Verify Loopkeeper checkout before trusted reads
+        env:
+          CONSUMER_TRUSTED_SHA: ${{ needs.resolve.outputs.consumer_trusted_sha }}
+          LOOPKEEPER_SHA: ${{ inputs.loopkeeper_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git -C consumer rev-parse HEAD)" == "$CONSUMER_TRUSTED_SHA" ]]
+          [[ "$(git -C loopkeeper rev-parse HEAD)" == "$LOOPKEEPER_SHA" ]]
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Run issue triage
+        working-directory: consumer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ inputs.consumer_repo }}
+          LOOPKEEPER_ROOT: ${{ github.workspace }}/loopkeeper
+          PYTHONPATH: ${{ github.workspace }}/loopkeeper/src
+          LOOPKEEPER_API_KEY: ${{ secrets.model_api_key }}
+          LOOPKEEPER_REVIEW_ENABLED: "true"
+          LOOPKEEPER_TRUSTED_SHA: ${{ needs.resolve.outputs.consumer_trusted_sha }}
+          LOOPKEEPER_DEFAULT_BRANCH: ${{ needs.resolve.outputs.consumer_default_branch }}
+          LOOPKEEPER_MODEL: ${{ vars.LOOPKEEPER_MODEL || 'gpt-5.6-luna' }}
+          LOOPKEEPER_API_STYLE: ${{ vars.LOOPKEEPER_API_STYLE || 'responses' }}
+          LOOPKEEPER_API_BASE_URL: ${{ vars.LOOPKEEPER_API_BASE_URL || '' }}
+          LOOPKEEPER_REASONING_EFFORT: ${{ vars.LOOPKEEPER_REASONING_EFFORT || 'medium' }}
+          LOOPKEEPER_MAX_INPUT_BYTES: ${{ vars.LOOPKEEPER_MAX_INPUT_BYTES || '120000' }}
+          LOOPKEEPER_MAX_OUTPUT_TOKENS: ${{ vars.LOOPKEEPER_MAX_OUTPUT_TOKENS || '32000' }}
+          LOOPKEEPER_MAX_OUTPUT_BYTES: ${{ vars.LOOPKEEPER_MAX_OUTPUT_BYTES || '50000' }}
+          LOOPKEEPER_REQUEST_TIMEOUT: ${{ vars.LOOPKEEPER_REQUEST_TIMEOUT || '900' }}
+          LOOPKEEPER_JOB_TIMEOUT_SECONDS: ${{ inputs.job_timeout_seconds }}
+          LOOPKEEPER_POLICY_PATH: ${{ inputs.policy_path }}
+          LOOPKEEPER_OPERATOR: "0"
+          LOOPKEEPER_ARTIFACT_DIR: ${{ github.workspace }}/loopkeeper-artifacts
+        run: |
+          set -euo pipefail
+          "$LOOPKEEPER_ROOT/adapters/github/triage_issue.sh" "${{ inputs.issue_number }}"
+      - name: Record whether triage artifacts exist
+        id: artifact_status
+        if: always()
+        env:
+          ARTIFACT_DIR: ${{ github.workspace }}/loopkeeper-artifacts
+        run: |
+          set -euo pipefail
+          if [[ -s "$ARTIFACT_DIR/triage.md" && -s "$ARTIFACT_DIR/comment.md" && -s "$ARTIFACT_DIR/triage-metadata.json" ]]; then
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "available=false" >>"$GITHUB_OUTPUT"
+          fi
+      - name: Upload triage artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loopkeeper-triage-${{ github.run_id }}
+          path: ${{ github.workspace }}/loopkeeper-artifacts
+          if-no-files-found: error
+          retention-days: 7
+
+

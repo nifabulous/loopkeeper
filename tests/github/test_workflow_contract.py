@@ -302,6 +302,7 @@ def test_workflow_model_steps_pass_provider_wire_configuration():
         "pr-review.yml",
         "pr-review-posting.yml",
         "issue-triage.yml",
+        "issue-triage-readonly.yml",
         "agent.yml",
     )
     for name in workflows:
@@ -352,6 +353,26 @@ def test_issue_triage_separates_read_only_model_job_from_writer():
     assert re.search(r"^\s+issues: write$", writer, re.MULTILINE)
     assert 'LOOPKEEPER_OPERATOR: "1"' in writer
     assert "post_triage_comment.sh" in writer
+
+
+def test_issue_triage_read_only_entrypoint_has_no_writer_job():
+    """Artifact-only issue callers must not load a write-capable callee."""
+    path = ROOT / ".github/workflows/issue-triage-readonly.yml"
+    assert path.is_file(), "read-only issue triage needs its own reusable entrypoint"
+    raw = path.read_text(encoding="utf-8")
+    top_level = raw.split("jobs:", 1)[0]
+
+    assert re.search(r"^\s+issues: read$", top_level, re.MULTILINE)
+    assert "\n  writer:" not in raw
+    assert "issues: write" not in raw
+    assert 'LOOPKEEPER_OPERATOR: "0"' in raw
+    assert "post_triage_comment.sh" not in raw
+
+
+def test_issue_triage_read_only_caller_uses_read_only_entrypoint():
+    caller = (ROOT / "examples/github/issue-triage-caller.yml").read_text(encoding="utf-8")
+    assert "/.github/workflows/issue-triage-readonly.yml@" in caller
+    assert "post_comments: false" in caller
 
 
 def test_ci_shell_gate_runs_mutation_security_guard():
