@@ -111,6 +111,17 @@ def test_release_workflow_uses_job_scoped_oidc_trusted_publishing():
     assert "id-token: write" not in top_level
 
 
+def test_release_workflow_verifies_commit_and_artifact_bindings_before_publish():
+    raw = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    publish = raw.split("\n  publish:\n", 1)[1]
+
+    assert "ref: ${{ github.sha }}" in publish
+    assert "persist-credentials: false" in publish
+    assert "EXPECTED_COMMIT: ${{ github.sha }}" in publish
+    assert "python3 release/verify_artifact.py dist \"$EXPECTED_COMMIT\"" in publish
+    assert '"artifacts": artifacts' in raw
+
+
 def test_release_tree_contains_no_fixture_secret():
     for path in ROOT.rglob("*"):
         if not path.is_file() or ".git" in path.parts or "tests" in path.parts or "test_release_contract.py" in path.name:
