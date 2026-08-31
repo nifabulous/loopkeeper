@@ -109,7 +109,10 @@ After:
 - security
 ```
 
-There is no compatibility fallback. Loopkeeper 0.1.0 has not been publicly released, so the previous fixed vocabulary — which accepted only one extraction source's categories and rejected everything else, including this repository's own `## Scope` section — is removed outright rather than carried forward.
+There is no compatibility fallback. Loopkeeper 0.1.0 is publicly released, so
+the previous fixed vocabulary — which accepted only one extraction source's
+categories and rejected everything else, including this repository's own
+`## Scope` section — was removed outright rather than carried forward.
 
 `src/loopkeeper/prompt.py` renders the review prompt from that policy plus the active `RedactionResult`. The builder contains no product name, no domain-specific placeholder list, and no second category table — consumer wording lives in trusted Markdown, not in adapter heredoc.
 Contract placement is load-bearing. The contract is rendered as the **final**

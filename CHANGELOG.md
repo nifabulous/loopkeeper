@@ -4,20 +4,16 @@ All notable changes to Loopkeeper are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-Everything below is staged for `0.1.0`, which has **not been published**. There
-is no `v0.1.0` tag and no PyPI release yet. At publication this section is
-renamed to `## [0.1.0] - <date>` and the comparison links are added then.
+## [0.1.0] - 2026-08-31
 
 Loopkeeper is the standalone extraction of Relay's review-loop
 harness: a provider-neutral, bounded, sanitized, trust-separated model-call
 loop with a pure deterministic arbiter. Pull-request review is one reference
 consumer, alongside issue triage and headless agent execution.
 
-Because this will be the first release, everything below is new. There is no
-migration path from an earlier version, and no compatibility fallback is
-carried for pre-release behaviour.
+This is the first public release of Loopkeeper. There is no migration path
+from an earlier version, and no compatibility fallback is carried for
+pre-release behaviour.
 
 ### Added
 
@@ -114,5 +110,5 @@ carried for pre-release behaviour.
   selection is part of the trust-boundary contract rather than an incidental
   formatting choice.
 
-<!-- Link definitions are added at publication. Until the v0.1.0 tag exists,
-a compare or release link would resolve to nothing. -->
+[Unreleased]: https://github.com/nifabulous/loopkeeper/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/nifabulous/loopkeeper/releases/tag/v0.1.0

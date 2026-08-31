@@ -20,12 +20,13 @@ per-file digests with `release/verify_artifact.py`, and publishes to PyPI with
 the `pypa/gh-action-pypi-publish` action. Only this job has `id-token: write`,
 and no PyPI API token or `twine upload` is used.
 
-Before the first publication, configure a PyPI trusted publisher for the exact
-GitHub owner, repository, workflow filename (`.github/workflows/release.yml`),
-and, if the PyPI publisher is configured with one, the GitHub environment name.
-The workflow's `publish` input is the human approval gate; the first release
-also requires a manual check of package ownership and the reusable-workflow
-repository namespace.
+Configure a PyPI trusted publisher for the exact GitHub owner, repository, and
+workflow filename (`release.yml`). The first publication used a pending
+publisher; after the successful upload, PyPI converted it to a normal
+publisher. If a GitHub environment is configured later, its name must match
+the environment registered with PyPI. The workflow's `publish` input remains
+the human approval gate, and every release requires a manual check of package
+ownership and the reusable-workflow repository namespace.
 
 Consumer examples are templates until their fixture slug and full SHA are
 replaced. A publishable copy must use a full immutable workflow SHA, keep the
