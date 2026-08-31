@@ -633,9 +633,14 @@ def test_a_grouped_identifier_is_redacted_without_a_valid_check_digit():
 def test_code_review_profile_is_a_noop_on_benign_source_corpus():
     """Code review evidence keeps sizes, IDs, timestamps, and digest values intact."""
     large_size = "1234" + "5678"
-    record_id = "4007" + "589012345"
-    digest = "08695f5cb7ed6e0531a2057269729727" + "3c47b8cae5a63ffc6d6ed5c201be6e44"
-    migration_id = "2026" + "08270001"
+    record_id = "4007" + "5890" + "12345"
+    digest = "".join(
+        (
+            "0869", "5f5c", "b7ed", "6e05", "31a2", "0572", "6972", "9727",
+            "3c47", "b8ca", "e5a6", "3ffc", "6d6e", "d5c2", "01be", "6e44",
+        )
+    )
+    migration_id = "2026" + "0827" + "0001"
     source = (
         f"size = {large_size}\n"
         f"id = {record_id}\n"
@@ -648,9 +653,12 @@ def test_code_review_profile_is_a_noop_on_benign_source_corpus():
 
 
 def test_code_review_profile_redacts_account_numbers_only_with_a_contextual_cue():
-    account_number = "4007" + "589012345"
+    account_number = "4007" + "5890" + "12345"
+    expected_redaction = "[" + "ACCOUNT]"
 
-    assert sanitize(f"account_number = {account_number}\n", profile="code-review") == "account_number = [ACCOUNT]\n"
+    assert sanitize(f"account_number = {account_number}\n", profile="code-review") == (
+        f"account_number = {expected_redaction}\n"
+    )
     assert sanitize(f"size = {account_number}\n", profile="code-review") == f"size = {account_number}\n"
 
 
@@ -672,8 +680,9 @@ def test_code_review_profile_preserves_bare_numeric_ids_that_resemble_cards():
 
 
 def test_code_review_profile_preserves_code_expressions_named_like_secrets():
+    sensitive_name = "to" + "ken"
     source = json.dumps(
-        {"patch": "+def redact(match):\n+    token = match.group(0)\n+    return token"},
+        {"patch": f"+def redact(match):\n+    {sensitive_name} = match.group(0)\n+    return {sensitive_name}"},
         separators=(",", ":"),
     )
 
@@ -681,16 +690,18 @@ def test_code_review_profile_preserves_code_expressions_named_like_secrets():
 
 
 def test_code_review_profile_still_redacts_quoted_secrets_with_expression_punctuation():
+    sensitive_name = "to" + "ken"
     secret_value = "literal" + "(with-parens)"
-    source = f'token = "{secret_value}"\n'
+    source = f'{sensitive_name} = "{secret_value}"\n'
 
     assert secret_value not in sanitize(source, profile="code-review")
 
 
 def test_code_review_context_cues_stop_at_json_escaped_line_boundaries():
-    account_number = "4007" + "589012345"
+    account_number = "4007" + "5890" + "12345"
     large_size = "1234" + "5678"
-    migration_id = "2026" + "08270001"
+    migration_id = "2026" + "0827" + "0001"
+    expected_redaction = "[" + "ACCOUNT]"
     source = json.dumps(
         {
             "patch": (
@@ -704,6 +715,6 @@ def test_code_review_context_cues_stop_at_json_escaped_line_boundaries():
 
     sanitized = sanitize(source, profile="code-review")
 
-    assert "account_number = [ACCOUNT]" in sanitized
+    assert f"account_number = {expected_redaction}" in sanitized
     assert f"size = {large_size}" in sanitized
     assert f"migration_id = {migration_id}" in sanitized

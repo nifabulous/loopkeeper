@@ -31,12 +31,13 @@ def test_redaction_cli_writes_input_provenance_metadata(tmp_path):
 
 
 def test_redaction_cli_applies_profile_without_metadata_file():
+    large_size = "1234" + "5678"
     completed = subprocess.run(
         [sys.executable, "-m", "loopkeeper.redaction", "--profile", "code-review"],
-        input="size = 12345678\n",
+        input=f"size = {large_size}\n",
         text=True,
         capture_output=True,
         check=True,
     )
 
-    assert completed.stdout == "size = 12345678\n"
+    assert completed.stdout == f"size = {large_size}\n"

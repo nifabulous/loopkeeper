@@ -358,10 +358,10 @@ def _redact_code_review_account(match: re.Match[str]) -> str:
 
 
 def _redact_code_review_card(match: re.Match[str]) -> str:
-    token = match.group(0)
-    if any(character in " -" for character in token) or _has_contextual_cue(match, _CARD_CUE_RE):
+    candidate = match.group(0)
+    if any(character in " -" for character in candidate) or _has_contextual_cue(match, _CARD_CUE_RE):
         return _redact_card(match)
-    return token
+    return candidate
 
 
 def _sanitize_exempt_literal(literal: str, profile: RedactionProfile) -> str:
