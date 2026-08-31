@@ -328,7 +328,27 @@ def _redact_card(match: re.Match[str]) -> str:
 
 def _has_contextual_cue(match: re.Match[str], cue: re.Pattern[str]) -> bool:
     prefix = match.string[max(0, match.start() - 80) : match.start()]
+    boundary_end = max(
+        (
+            position + len(boundary)
+            for boundary in ("\n", "\r", r"\n", r"\r")
+            if (position := prefix.rfind(boundary)) >= 0
+        ),
+        default=0,
+    )
+    prefix = prefix[boundary_end:]
     return cue.search(prefix) is not None
+
+
+def _is_code_review_expression_assignment(match: re.Match[str]) -> bool:
+    assignment = match.group(0)
+    _, separator, value = assignment.partition("=")
+    if not separator:
+        _, separator, value = assignment.partition(":")
+    value = value.lstrip()
+    if not separator or value.startswith(('"', "'", r'\"', r"\'")):
+        return False
+    return re.match(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*[\[(]", value) is not None
 
 
 def _redact_code_review_account(match: re.Match[str]) -> str:
@@ -374,6 +394,16 @@ def _sanitize_line(line: str, profile: RedactionProfile) -> str:
     masked = line
     for pattern, predicate in _EXEMPT_RULES:
         masked = pattern.sub(_mask_with(predicate), masked)
+    code_expressions: list[str] = []
+    if profile == "code-review":
+        def _protect_code_expression(match: re.Match[str]) -> str:
+            if not _is_code_review_expression_assignment(match):
+                return match.group(0)
+            code_expressions.append(match.group(0))
+            return f"[CODE_EXPRESSION_{len(code_expressions) - 1}]"
+
+        for pattern, _ in SECRET_PATTERNS[-2:]:
+            masked = pattern.sub(_protect_code_expression, masked)
     for pattern, replacement in SECRET_PATTERNS[1:]:
         masked = pattern.sub(replacement, masked)
     if profile == "payments":
@@ -392,6 +422,8 @@ def _sanitize_line(line: str, profile: RedactionProfile) -> str:
         masked = _CARD_RE.sub(_redact_code_review_card, masked)
         for index, literal in enumerate(protected):
             masked = masked.replace(f"[HASH_LITERAL_{index}]", literal)
+    for index, expression in enumerate(code_expressions):
+        masked = masked.replace(f"[CODE_EXPRESSION_{index}]", expression)
     for index, literal in enumerate(exempt):
         masked = masked.replace(f"[LITERAL_{index}]", literal)
     return hunk_prefix + masked
@@ -540,7 +572,7 @@ def _main(argv: list[str] | None = None) -> int:
         value = raw
 
     if args.metadata_file is None:
-        sys.stdout.write(sanitize(value))
+        sys.stdout.write(sanitize(value, profile=args.profile))
         return 0
 
     source_placeholders_defanged = _SOURCE_PLACEHOLDER_RE.search(value) is not None
