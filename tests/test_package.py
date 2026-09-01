@@ -9,7 +9,7 @@ def test_package_import_and_version_without_runtime_dependencies():
         capture_output=True,
         text=True,
     )
-    assert result.stdout.strip() == "0.1.0"
+    assert result.stdout.strip() == "0.1.1"
 
 
 def test_module_entrypoint_prints_version():
@@ -19,4 +19,4 @@ def test_module_entrypoint_prints_version():
         capture_output=True,
         text=True,
     )
-    assert result.stdout.strip() == "loopkeeper 0.1.0"
+    assert result.stdout.strip() == "loopkeeper 0.1.1"

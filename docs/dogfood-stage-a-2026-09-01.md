@@ -190,3 +190,12 @@ and one arbiter marker. Across the intentionally seeded history there are
 eight review markers and three superseded markers; the disposable posting and
 seed workflows are now removed/disabled, and no production repository has
 write enablement.
+
+The three retained GitHub artifacts are time-limited (all expire 2026-09-08),
+so their bounded metadata is fingerprinted here for audit continuity:
+
+| Run | Artifact ID | `review-metadata.json` SHA-256 | `trailer.json` SHA-256 |
+| --- | ---: | --- | --- |
+| `33533583527` | `9810749267` | `39b6de13817efdefb6a409babbc866369c6cf1d26e53660e927a207e99623b1c` | `08619cf51e873b108ab17b4c11cb8c793c6706872549b92168fa9f9952216073` |
+| `33535794441` | `9811568749` | `50cb4a9f349bfd2e8421d2279a9f70088855f86c8c704461cf155c39d167f8ff` | `08619cf51e873b108ab17b4c11cb8c793c6706872549b92168fa9f9952216073` |
+| `33537265860` | `9812144417` | `dfed03dbbe36d482f5bce7b078060d21eb813b6b9cda8261c350e1264400fe2f` | `08619cf51e873b108ab17b4c11cb8c793c6706872549b92168fa9f9952216073` |

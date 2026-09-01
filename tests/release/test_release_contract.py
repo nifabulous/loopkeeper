@@ -58,7 +58,7 @@ def test_non_publishable_templates_are_explicitly_marked():
 def test_source_and_release_manifest_versions_have_one_source_of_truth():
     source = (ROOT / "src/loopkeeper/__init__.py").read_text(encoding="utf-8")
     version = re.search(r"__version__\s*=\s*['\"]([^'\"]+)", source)
-    assert version and version.group(1) == "0.1.0"
+    assert version and version.group(1) == "0.1.1"
     release = json.loads((ROOT / "release/release-manifest.json").read_text(encoding="utf-8"))
     assert release["version"] == version.group(1)
     assert re.fullmatch(r"[0-9a-f]{40}", release["commit_sha"])

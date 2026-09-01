@@ -18,8 +18,8 @@ EXPECTED_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 def _write_release_fixture(tmp_path: Path) -> Path:
     dist = tmp_path / "dist"
     dist.mkdir()
-    wheel = dist / "loopkeeper-0.1.0-py3-none-any.whl"
-    sdist = dist / "loopkeeper-0.1.0.tar.gz"
+    wheel = dist / "loopkeeper-0.1.1-py3-none-any.whl"
+    sdist = dist / "loopkeeper-0.1.1.tar.gz"
     wheel.write_bytes(b"wheel")
     sdist.write_bytes(b"sdist")
     (dist / "COMMIT_SHA").write_text(EXPECTED_COMMIT + "\n", encoding="utf-8")
@@ -27,7 +27,7 @@ def _write_release_fixture(tmp_path: Path) -> Path:
         json.dumps(
             {
                 "schema": 1,
-                "version": "0.1.0",
+                "version": "0.1.1",
                 "commit_sha": EXPECTED_COMMIT,
                 "package_sha256": MODULE.sha256(wheel),
                 "artifacts": [
