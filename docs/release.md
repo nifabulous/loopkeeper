@@ -31,7 +31,7 @@ ownership and the reusable-workflow repository namespace.
 Consumer examples are templates until their fixture slug and full SHA are
 replaced. A publishable copy must use a full immutable workflow SHA, keep the
 `uses:` pin and `loopkeeper_sha` input identical, and pin any package install as
-`loopkeeper==0.1.0` with a trusted hash/provenance record.
+`loopkeeper==0.1.1` with a trusted hash/provenance record.
 
 Before Phase 2, complete the staged dogfood: Stage A runs with writes disabled
 and proves coverage, exact-head filtering, privacy, and zero write attempts;

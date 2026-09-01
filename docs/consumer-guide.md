@@ -70,7 +70,7 @@ through the bounded `/actions/workflows` API response before probing runs; it
 does not compare those two strings directly. A missing, ambiguous, inactive,
 truncated, or stale CI result takes the current-head fallback review path.
 
-For a generic CI consumer, install the exact package release (`loopkeeper==0.1.0`)
+For a generic CI consumer, install the exact package release (`loopkeeper==0.1.1`)
 from a trusted package index and run `examples/ci/generic-review.sh` or
 `examples/ci/generic-triage.sh` with a caller-attested manifest.
 
