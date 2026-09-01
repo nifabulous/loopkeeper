@@ -87,3 +87,21 @@ pull-request CI event.
 This confirms the intended precedence: a fallback result can be produced when
 CI evidence is unavailable, while a later exact-head `pull_request` CI result
 is independently attested through `workflow_run`.
+
+## Caller-attested generic review
+
+The provider-neutral CLI path was exercised with a signed generic review
+manifest and the test-only protected key fixture. The local artifact-only
+harness completed with exit code `0` and produced `review.md` and
+`trailer.json`.
+
+- Manifest digest: `dcf6b8bdc20bd75c6db676b2cc48099e54c08cc0daac66919b1e24c324f8df4d`
+- Trust mode: `caller-attested`
+- Schema-2 trailer: valid; no diagnostic or error code
+- Review artifact SHA-256:
+  `195374a1fcb918ed7d055afdb105ea701e1d567a5f5c5f2dfef3ee9a5ae002f0`
+
+The harness used only the repository's test key and a bounded fake model; no
+production credentials or provider payloads were persisted. This verifies the
+manifest digest/signature boundary and generic artifact contract before the
+separate Stage B write gate.
