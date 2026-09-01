@@ -199,6 +199,13 @@ def test_called_workflow_writer_concurrency_is_non_cancelable():
     assert re.search(r"concurrency:\s*\n\s+group:.*pr", raw)
 
 
+def test_read_only_and_posting_review_concurrency_groups_are_disjoint():
+    readonly = (ROOT / ".github/workflows/pr-review.yml").read_text(encoding="utf-8")
+    posting = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")
+    assert "group: loopkeeper-pr-review-readonly-${{" in readonly
+    assert "group: loopkeeper-pr-review-posting-${{" in posting
+
+
 def test_reusable_workflows_persist_read_only_artifacts():
     pr = (ROOT / ".github/workflows/pr-review.yml").read_text(encoding="utf-8")
     posting_pr = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")
