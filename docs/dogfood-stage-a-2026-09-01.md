@@ -43,3 +43,24 @@ Post-fix manual dispatch `33500982996` completed successfully and exercised
 the dispatch coercion; it produced no artifact because PR #3's then-current
 head already had a canonical review. The later artifact-producing runs above
 exercised the `pull_request_target` and `workflow_run` event-number branches.
+
+## Read-only issue triage
+
+Issue triage was exercised against
+`nifabulous/loopkeeper-dogfood-20260831#2` using the same immutable Loopkeeper
+revision.
+
+- Consumer trusted revision: `b393247fa58c26e685ce04ed8ddec2921b838752`
+- Workflow-dispatch run: `33510559939`
+- Run conclusion: `success`
+- Operator state: `false`
+- Write-attempt count: `0`
+- Issue comment count before and after: `0`
+- Artifact fingerprint:
+  `3e73f31097d8f75b82d55474845f991bca523b28c5425a9f604492fc5c0f14ec`
+- Result: Documentation / P3
+
+The downloaded artifact contained `triage.md`, `comment.md`, and
+`triage-metadata.json`. The dispatch also verified that issue-number inputs
+must be coerced to the reusable workflow's numeric input type; both shipped
+issue-triage caller templates now enforce that boundary.
