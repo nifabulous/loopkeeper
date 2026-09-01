@@ -105,3 +105,88 @@ The harness used only the repository's test key and a bounded fake model; no
 production credentials or provider payloads were persisted. This verifies the
 manifest digest/signature boundary and generic artifact contract before the
 separate Stage B write gate.
+
+## Stage B dogfood evidence — disposable writes
+
+Stage B was run only after explicit approval in the Codex task, against the
+private throwaway consumer `nifabulous/loopkeeper-dogfood-20260831` PR #3. The
+posting caller used the merged concurrency fix at
+`b654c89943a49109266f25cb132093ace0e14b67`; gap-issue creation remained
+disabled throughout. The disposable caller and model workflows were disabled
+and the temporary seed workflow was removed after the exercise.
+
+### Fallback creation
+
+- `dogfood_stage`: `B-disposable-write`
+- Operator state: `true`
+- Gap-issue state: disabled
+- No-CI head: `40ca624895664123fb955b99929a857222a838a5`
+- Posting run: `33533583527` (`pull_request_target`), successful
+- Writer outcome: `success`; `LOOPKEEPER_OPERATOR=1`
+- Canonical review comment: `5497332950`
+- Published evidence: `fallback`
+
+The writer created one bounded review comment for the exact head. Its trailer
+parsed as Schema 2 and its coverage metadata reported both changed files with
+no truncated patches.
+
+### Exact-head CI replacement and concurrency fix
+
+The first exact-head attempt exposed a real workflow defect: the read-only and
+posting reusable callers shared one concurrency group. Runs
+`33534079646`/`33534079709` and the posting `workflow_run`
+`33534103767` were cancelled while read-only run `33534103902` completed. PR
+#31 fixed this by giving the two callers distinct group prefixes; the fix
+merged as `b654c89943a49109266f25cb132093ace0e14b67`.
+
+After repinning the disposable callers to that revision:
+
+- Exact CI head: `c62a2bd3ba8dc33ac37db5d671af62ce28e4b3f2`
+- Fallback seed run: `33535419952`, successful; comment `5497529778`
+- Exact pull-request CI run: `33534080551`, successful
+- Posting `workflow_run`: `33535794441`, successful
+- Read-only `workflow_run`: `33535794533`, successful
+- Final comment for that head: still `5497529778` (updated in place)
+
+The posting artifact reported `event_name: workflow_run`, exact-head CI
+evidence, complete two-file coverage, zero truncated patches, and a valid
+Schema-2 trailer. The comment changed from `loopkeeper-evidence:fallback` to
+`loopkeeper-evidence:ci` without creating a second current-head comment.
+
+### Duplicate reconciliation
+
+For head `eaac6e344f233194dc57112005a678c25dc2e206`, seed run `33537166764`
+created two bot-authored comments (`5497721301` and `5497721446`) with the
+same canonical marker. Replay run `33537265860` completed successfully after
+the concurrency fix:
+
+- The oldest comment, `5497721301`, remained canonical and carried the valid
+  CI review trailer.
+- The newer comment, `5497721446`, was rewritten in place with
+  `loopkeeper-superseded:3:eaac6e344f233194dc57112005a678c25dc2e206:5497721446`.
+- No new review comment was created.
+- The artifact reported complete coverage (2 files, 0 truncated patches) and
+  `trailer_validation.valid: true` with no error code.
+
+### Arbiter disposition and replay
+
+The GitHub collector read the disposable PR under the trusted Loopkeeper
+checkout and the pure arbiter returned `MERGE-CLEAN` under rule `CLEAN`
+(`needs_human: false`, 8 rounds). Publishing that decision twice at the same
+head left exactly one current-head arbiter marker, comment `5497819304`, with
+the second call updating the existing comment rather than creating another.
+The local probe set `LOOPKEEPER_BOT_LOGIN` to the authenticated disposable
+owner; the Actions workflow uses its normal `github-actions[bot]` identity.
+
+The arbiter regression and round-trip suites passed (`60 passed`), including
+the fail-closed malformed-latest-round case (`NEEDS-HUMAN` with
+`MALFORMED-TRAILER`, 1 passed / 49 deselected). No model payloads or
+credentials were persisted.
+
+### Final disposable state
+
+The latest head has one canonical review marker, one bounded superseded marker,
+and one arbiter marker. Across the intentionally seeded history there are
+eight review markers and three superseded markers; the disposable posting and
+seed workflows are now removed/disabled, and no production repository has
+write enablement.
