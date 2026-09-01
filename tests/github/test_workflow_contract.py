@@ -379,6 +379,21 @@ def test_issue_triage_read_only_caller_uses_read_only_entrypoint():
     assert "post_comments: false" in caller
 
 
+def test_issue_triage_caller_coerces_dispatch_issue_number():
+    numeric_issue_number = (
+        "issue_number: ${{ fromJSON(format('{0}', "
+        "github.event.issue.number || inputs.issue_number)) }}"
+    )
+    for name in ("issue-triage-caller.yml", "issue-triage-posting-caller.yml"):
+        caller = (ROOT / "examples/github" / name).read_text(encoding="utf-8")
+        assert re.search(
+            r"workflow_dispatch:\s*\n\s+inputs:\s*\n\s+issue_number:\s*\n"
+            r"\s+required: true\n\s+type: number",
+            caller,
+        ), name
+        assert numeric_issue_number in caller, name
+
+
 def test_ci_shell_gate_runs_mutation_security_guard():
     raw = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "tests/github/test_automation.sh" in raw
