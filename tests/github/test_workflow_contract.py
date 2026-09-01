@@ -314,6 +314,10 @@ def test_workflow_model_steps_pass_provider_wire_configuration():
 
 
 def test_pr_caller_manual_dispatch_requires_and_passes_pr_number():
+    numeric_pr_number = (
+        "pr_number: ${{ fromJSON(format('{0}', github.event.pull_request.number || "
+        "github.event.workflow_run.pull_requests[0].number || inputs.pr_number || 0)) }}"
+    )
     for name in ("pr-review-caller.yml", "pr-review-posting-caller.yml"):
         raw = (ROOT / "examples/github" / name).read_text(encoding="utf-8")
         assert re.search(
@@ -321,7 +325,7 @@ def test_pr_caller_manual_dispatch_requires_and_passes_pr_number():
             r"\s+description: .+\n\s+required: true\n\s+type: number",
             raw,
         ), name
-        assert "pr_number: ${{ inputs.pr_number || 0 }}" in raw, name
+        assert numeric_pr_number in raw, name
 
 
 def test_shell_reasoning_effort_allowlists_match_transport():

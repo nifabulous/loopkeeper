@@ -33,7 +33,7 @@ jobs:
       loopkeeper_sha: 0123456789abcdef0123456789abcdef01234567
       ci_workflow_name: CI
       ci_workflow_file: ci.yml
-      pr_number: ${{ inputs.pr_number || 0 }}
+      pr_number: ${{ fromJSON(format('{0}', github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || inputs.pr_number || 0)) }}
       expected_head_sha: ${{ github.event.workflow_run.head_sha || '' }}
       job_timeout_seconds: 1200
       # Visible PR comments are the default. Set false for an artifact-only run.
