@@ -43,12 +43,12 @@ jobs:
         (github.event.workflow_run.event == 'pull_request' &&
          github.event.workflow_run.pull_requests[0].number != null)
       }}
-    uses: nifabulous/loopkeeper/.github/workflows/pr-review-posting.yml@f953d63d35c6229c445b79f6980da5514c249932
+    uses: nifabulous/loopkeeper/.github/workflows/pr-review-posting.yml@ff1dbeb4f3eee1a45dc34ad1e02c062b93d26231
     with:
       consumer_repo: ${{ github.repository }}
       loopkeeper_repo: nifabulous/loopkeeper
       consumer_trusted_sha: ""
-      loopkeeper_sha: f953d63d35c6229c445b79f6980da5514c249932
+      loopkeeper_sha: ff1dbeb4f3eee1a45dc34ad1e02c062b93d26231
       ci_workflow_name: Loopkeeper CI
       ci_workflow_file: ci.yml
       expected_head_sha: ${{ github.event.workflow_run.head_sha || '' }}
