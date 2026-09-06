@@ -106,7 +106,29 @@ def test_workflow_run_path_filters_event_head_and_open_pr():
     assert select_workflow_run_target("workflow_run", "pull_request", HEAD, HEAD, "CLOSED", 7, [7]) == "fallback"
     assert select_workflow_run_target("workflow_run", "pull_request", HEAD, HEAD, "OPEN", 7, []) == "fallback"
     assert select_workflow_run_target("workflow_run", "pull_request", HEAD, HEAD, "OPEN", 7, [8]) == "fallback"
-    assert select_workflow_run_target("workflow_run", "pull_request", HEAD, HEAD, "OPEN", 7, [7, 8]) == "fallback"
+    assert select_workflow_run_target("workflow_run", "pull_request", HEAD, HEAD, "OPEN", 7, [7, 8]) == "reviewable"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ROOT / ".github/workflows/loopkeeper-pr-review.yml",
+        ROOT / "examples/github/pr-review-caller.yml",
+        ROOT / "examples/github/pr-review-posting-caller.yml",
+    ],
+    ids=lambda path: path.name,
+)
+def test_pr_callers_fan_out_workflow_run_targets_after_current_head_checks(path):
+    raw = path.read_text(encoding="utf-8")
+
+    assert re.search(r"^  targets:$", raw, re.MULTILINE)
+    assert "RUN_PULL_REQUESTS" in raw
+    assert "pulls/${pr}" in raw
+    assert "state" in raw and "head.sha" in raw
+    assert "fromJSON(needs.targets.outputs.pr_numbers)" in raw
+    assert re.search(r"^    strategy:$", raw, re.MULTILINE)
+    assert re.search(r"^      matrix:$", raw, re.MULTILINE)
+    assert "github.event.workflow_run.pull_requests[0]" not in raw
 
 
 def test_caller_pins_remote_workflow_and_keeps_triggers_on_default_branch():
@@ -321,7 +343,7 @@ def test_pr_caller_manual_dispatch_requires_and_passes_pr_number():
             r"\s+description: .+\n\s+required: true\n\s+type: number",
             raw,
         ), name
-        assert "pr_number: ${{ inputs.pr_number || 0 }}" in raw, name
+        assert "pr_number: ${{ matrix.pr_number }}" in raw, name
 
 
 def test_shell_reasoning_effort_allowlists_match_transport():

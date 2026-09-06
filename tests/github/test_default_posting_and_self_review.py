@@ -44,6 +44,16 @@ def test_loopkeeper_reviews_its_own_pull_requests_with_pinned_posting_caller():
     assert "post_comments: true" in raw
 
 
+def test_self_review_fanout_is_bounded_to_open_exact_head_prs():
+    raw = (ROOT / ".github/workflows/loopkeeper-pr-review.yml").read_text(encoding="utf-8")
+
+    assert "RUN_HEAD_SHA" in raw
+    assert "pulls/${pr}" in raw
+    assert "fromJSON(needs.targets.outputs.pr_numbers)" in raw
+    assert "fail-fast: false" in raw
+    assert "github.event.workflow_run.pull_requests[0]" not in raw
+
+
 def test_consumer_guide_explains_posting_default_and_opt_out():
     guide = (ROOT / "docs/consumer-guide.md").read_text(encoding="utf-8")
 

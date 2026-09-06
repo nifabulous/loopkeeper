@@ -4,6 +4,22 @@ All notable changes to Loopkeeper are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The deterministic arbiter now waits for five consecutive rounds before
+  citing `STUCK-P1` (up from three), and permits five consecutive
+  unverifiable rounds before citing `UNVERIFIABLE-ROUND-CAP` on the next round.
+- Arbiter disposition comments are append-only. Each distinct PR/head/decision
+  event receives its own immutable comment, while an exact retry is suppressed
+  by a canonical SHA-256 decision fingerprint; historical comments are never
+  edited in place.
+- PR-review callers now fan out `workflow_run` completions across every
+  associated open PR whose current head matches the run SHA. The reusable
+  workflow receives an explicit PR number per matrix job and no longer relies
+  on the first association in the event payload.
+
 ## [0.1.0] - 2026-08-31
 
 Loopkeeper is the standalone extraction of Relay's review-loop

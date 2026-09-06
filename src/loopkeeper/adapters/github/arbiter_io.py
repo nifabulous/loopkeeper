@@ -5,9 +5,9 @@ the default-branch checkout against the forge API, reads policy/contract/context
 with git show, and passes PR content only through the untrusted channel.
 
 Collector: collect_history(repo, pr, trusted_sha, bot_login) -> History
-Poster: post_arbiter_comment (uses same marker+author lookup and serialized
-        writer as reviewer comments, never creates second current-head arbiter
-        comment).
+Poster: post_arbiter_comment (uses the same authenticated lookup and serialized
+        writer as reviewer comments, appending distinct decision events while
+        suppressing an exact retry).
 
 Also provides History collection with bounded pagination, retryable reads, and
 fail-closed semantics for truncated/failed reads (never interpreted as “no CI run”
@@ -16,6 +16,7 @@ or “no comments”).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -28,8 +29,21 @@ from loopkeeper.types import Comment, History, HistoryRound
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
-# Marker for arbiter comments: loopkeeper-arbiter:{pr}:{head_sha}
-_ARBITER_MARKER_RE = re.compile(r"<!-- loopkeeper-arbiter:(\d+):([0-9a-f]{40}) -->")
+# Marker for arbiter comments: loopkeeper-arbiter:{pr}:{head_sha}:{decision_digest}
+# The optional digest keeps the reader compatible with the pre-append-only
+# two-part marker while new writes identify one immutable decision event.
+_ARBITER_MARKER_RE = re.compile(
+    r"<!-- loopkeeper-arbiter:(\d+):([0-9a-f]{40})(?::([0-9a-f]{64}))? -->"
+)
+_DECISION_FIELDS = (
+    "recommendation",
+    "loop_action",
+    "cited_rule",
+    "needs_human",
+    "round_count",
+    "proposed_gaps",
+    "detail",
+)
 
 
 def _validate_repo(repo: str) -> None:
@@ -42,12 +56,30 @@ def _validate_pr(pr: int) -> None:
         raise ValueError("pr must be positive int")
 
 
-def serialize_arbiter_marker(pr: int, head_sha: str) -> str:
+def serialize_arbiter_marker(pr: int, head_sha: str, decision_digest: str | None = None) -> str:
     if not isinstance(pr, int) or pr <= 0:
         raise ValueError("pr must be positive int")
     if not _SHA_RE.fullmatch(head_sha):
         raise ValueError("head_sha must be 40-hex")
-    return f"<!-- loopkeeper-arbiter:{pr}:{head_sha} -->"
+    if decision_digest is not None and not re.fullmatch(r"[0-9a-f]{64}", decision_digest):
+        raise ValueError("decision_digest must be 64-hex")
+    suffix = f":{decision_digest}" if decision_digest is not None else ""
+    return f"<!-- loopkeeper-arbiter:{pr}:{head_sha}{suffix} -->"
+
+
+def _decision_payload(decision) -> dict[str, object]:
+    """Return the stable, public fields that define one arbiter decision."""
+    return {field: getattr(decision, field, None) for field in _DECISION_FIELDS}
+
+
+def _decision_fingerprint(decision) -> str:
+    payload = json.dumps(
+        _decision_payload(decision),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 class GitHubApiArbiter(Protocol):
@@ -418,8 +450,9 @@ def post_arbiter_comment(repo: str, pr: int, decision, operator: bool) -> None:
         decision: Decision dataclass from loopkeeper.arbiter (has recommendation, cited_rule, etc.)
         operator: whether operator mode is enabled (requires LOOPKEEPER_OPERATOR=1 in writer)
 
-    The body carries current head and decision artifact, repeats update in place
-    for same head, never creates second current-head arbiter comment.
+    The body carries the current head and decision artifact. Each distinct
+    decision event gets a new immutable comment; an exact retry is suppressed
+    by its decision fingerprint. Historical arbiter comments are never edited.
 
     Uses the same marker+author lookup and serialized writer as reviewer comments.
     """
@@ -450,7 +483,8 @@ def post_arbiter_comment(repo: str, pr: int, decision, operator: bool) -> None:
     if not _SHA_RE.fullmatch(current_head):
         raise RuntimeError(f"PR head is not 40-hex: {current_head!r}")
 
-    marker = serialize_arbiter_marker(pr, current_head)
+    decision_digest = _decision_fingerprint(decision)
+    marker = serialize_arbiter_marker(pr, current_head, decision_digest)
 
     # Build body: decision artifact + head
     body = (
@@ -461,10 +495,10 @@ def post_arbiter_comment(repo: str, pr: int, decision, operator: bool) -> None:
         f"**Cited rule:** {decision.cited_rule}\n"
         f"**Round count:** {decision.round_count}\n"
         f"**Needs human:** {decision.needs_human}\n\n"
-        f"```json\n{json.dumps(decision.__dict__ if hasattr(decision, '__dict__') else {}, indent=2)}\n```\n"
+        f"```json\n{json.dumps(_decision_payload(decision), indent=2)}\n```\n"
     )
 
-    # Use bounded writer pattern: read comments, check existing arbiter comment for same head
+    # Use bounded writer pattern: read comments, check for this exact decision event
     # Need operator gate
     def require_operator():
         if os.environ.get("LOOPKEEPER_OPERATOR") != "1":
@@ -481,76 +515,58 @@ def post_arbiter_comment(repo: str, pr: int, decision, operator: bool) -> None:
         )
         comments = json.loads(result.stdout)
         if not isinstance(comments, list):
-            comments = []
+            raise RuntimeError("arbiter comment read was not a JSON array")
     except Exception as exc:
         raise RuntimeError(f"could not list comments for arbiter: {exc}") from exc
 
-    # Find existing arbiter comment for this pr+head with bot author
+    # Find an exact decision event for this PR/head with the authenticated bot.
+    # Older two-part markers are intentionally not matched: they represent a
+    # historical decision whose body must remain immutable.
     bot = os.environ.get("LOOPKEEPER_BOT_LOGIN") or "github-actions[bot]"
-    existing = None
-    for c in comments:
-        login = (c.get("user") or {}).get("login", "") if isinstance(c.get("user"), dict) else ""
-        body_existing = c.get("body") or ""
-        cid = c.get("id")
-        if login == bot and marker in body_existing:
-            existing = c
-            break
+    def has_exact_decision(comment_list: list[dict]) -> bool:
+        for comment in comment_list:
+            login = (comment.get("user") or {}).get("login", "") if isinstance(comment.get("user"), dict) else ""
+            if login == bot and marker in (comment.get("body") or ""):
+                return True
+        return False
 
-    # If existing and same head, update in place, else create (but never create second current-head)
-    if existing is not None:
-        # Update in place (same head)
-        require_operator()
-        cid = existing.get("id")
-        subprocess.run(
-            ["gh", "api", "--method", "PATCH", f"repos/{repo}/issues/comments/{cid}", "-f", f"body={body}"],
+    if has_exact_decision(comments):
+        return
+
+    # Re-read head and comments immediately before create. This closes the
+    # read/create race without ever PATCHing a historical decision comment.
+    try:
+        result2 = subprocess.run(
+            ["gh", "pr", "view", str(pr), "--repo", repo, "--json", "headRefOid,state"],
+            capture_output=True,
+            text=True,
             check=True,
             timeout=20,
         )
-    else:
-        # No existing: create, but only if not already created in this run (avoid duplicate)
-        # Re-read head+comments before create to ensure no race created one
-        # Second read
-        try:
-            result2 = subprocess.run(
-                ["gh", "pr", "view", str(pr), "--repo", repo, "--json", "headRefOid,state"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=20,
-            )
-            data2 = json.loads(result2.stdout)
-            head2 = data2.get("headRefOid") or ""
-            state2 = data2.get("state") or "OPEN"
-            if state2 != "OPEN" or head2 != current_head:
-                return
-            result3 = subprocess.run(
-                ["gh", "api", f"repos/{repo}/issues/{pr}/comments?per_page=100"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=20,
-            )
-            comments2 = json.loads(result3.stdout)
-            if not isinstance(comments2, list):
-                raise RuntimeError("arbiter comment read was not a JSON array")
-            for c in comments2:
-                login = (c.get("user") or {}).get("login", "") if isinstance(c.get("user"), dict) else ""
-                if login == bot and marker in (c.get("body") or ""):
-                    # Another writer created it while we were checking; update instead of creating second
-                    require_operator()
-                    cid = c.get("id")
-                    subprocess.run(
-                        ["gh", "api", "--method", "PATCH", f"repos/{repo}/issues/comments/{cid}", "-f", f"body={body}"],
-                        check=True,
-                        timeout=20,
-                    )
-                    return
-        except Exception as exc:
-            raise RuntimeError("could not reconcile concurrent arbiter comment write") from exc
-        require_operator()
-        subprocess.run(
-            ["gh", "pr", "comment", str(pr), "--repo", repo, "--body-file", "-"],
-            input=body.encode("utf-8"),
+        data2 = json.loads(result2.stdout)
+        head2 = data2.get("headRefOid") or ""
+        state2 = data2.get("state") or "OPEN"
+        if state2 != "OPEN" or head2 != current_head:
+            return
+        result3 = subprocess.run(
+            ["gh", "api", f"repos/{repo}/issues/{pr}/comments?per_page=100"],
+            capture_output=True,
+            text=True,
             check=True,
             timeout=20,
         )
+        comments2 = json.loads(result3.stdout)
+        if not isinstance(comments2, list):
+            raise RuntimeError("arbiter comment read was not a JSON array")
+        if has_exact_decision(comments2):
+            return
+    except Exception as exc:
+        raise RuntimeError("could not reconcile concurrent arbiter comment write") from exc
+
+    require_operator()
+    subprocess.run(
+        ["gh", "pr", "comment", str(pr), "--repo", repo, "--body-file", "-"],
+        input=body.encode("utf-8"),
+        check=True,
+        timeout=20,
+    )

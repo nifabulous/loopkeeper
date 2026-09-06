@@ -86,7 +86,7 @@ def test_resolve_workflow_target_requires_active_and_unique():
 
 def test_select_workflow_run_target_pure_filter():
     sha = "a" * 40
-    # Reviewable: workflow_run, pull_request, exact head, OPEN, exactly one association
+    # Reviewable: workflow_run, pull_request, exact head, OPEN, one target association
     assert select_workflow_run_target("workflow_run", "pull_request", sha, sha, "OPEN", 15, [15]) == "reviewable"
     # Fallback cases
     assert select_workflow_run_target("pull_request_target", "pull_request", sha, sha, "OPEN", 15, [15]) == "fallback"
@@ -96,7 +96,10 @@ def test_select_workflow_run_target_pure_filter():
     assert select_workflow_run_target("workflow_run", "pull_request", sha, sha, "OPEN", 15, []) == "fallback"
     assert select_workflow_run_target("workflow_run", "pull_request", sha, sha, "OPEN", 15, [15, 15]) == "fallback"  # duplicated
     assert select_workflow_run_target("workflow_run", "pull_request", sha, sha, "OPEN", 15, [16]) == "fallback"  # wrong pr
-    assert select_workflow_run_target("workflow_run", "pull_request", sha, sha, "OPEN", 15, [15, 16]) == "fallback"  # ambiguous (multiple)
+    # Multiple distinct associated PRs are valid fan-out targets; each target
+    # is checked independently against the exact current head.
+    assert select_workflow_run_target("workflow_run", "pull_request", sha, sha, "OPEN", 15, [15, 16]) == "reviewable"
+    assert select_workflow_run_target("workflow_run", "pull_request", sha, sha, "OPEN", 16, [15, 16]) == "reviewable"
     # Missing association
     assert select_workflow_run_target("workflow_run", "pull_request", sha, sha, "OPEN", 15, []) == "fallback"
     # Non-hex sha

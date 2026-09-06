@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from loopkeeper.adapters.github.arbiter_io import CollectionUnavailable, _collect_with_api, _collect_with_gh
+from loopkeeper.adapters.github.arbiter_io import (
+    CollectionUnavailable,
+    _collect_with_api,
+    _collect_with_gh,
+    post_arbiter_comment,
+)
 
 
 class FailingDiffApi:
@@ -48,3 +53,107 @@ def test_arbiter_writer_requires_explicit_operator_argument(monkeypatch):
         from loopkeeper.adapters.github.arbiter_io import post_arbiter_comment
 
         post_arbiter_comment("example/project", 7, object(), False)
+
+
+class _ArbiterCommentGH:
+    def __init__(self, head: str):
+        self.head = head
+        self.comments: list[dict] = []
+        self.calls: list[list[str]] = []
+
+    def run(self, args, **kwargs):
+        self.calls.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return SimpleNamespace(stdout=json.dumps({"headRefOid": self.head, "state": "OPEN"}))
+        if args[:2] == ["gh", "api"] and "--method" not in args:
+            return SimpleNamespace(stdout=json.dumps(self.comments))
+        if args[:3] == ["gh", "pr", "comment"]:
+            body = kwargs["input"].decode("utf-8")
+            self.comments.append({
+                "id": len(self.comments) + 1,
+                "user": {"login": "github-actions[bot]"},
+                "body": body,
+            })
+            return SimpleNamespace(stdout="{}")
+        if args[:3] == ["gh", "api", "--method"]:
+            raise AssertionError("append-only arbiter writer must not PATCH a prior comment")
+        raise AssertionError(f"unexpected command: {args}")
+
+
+class _MalformedArbiterCommentsGH(_ArbiterCommentGH):
+    def run(self, args, **kwargs):
+        self.calls.append(args)
+        if args[:3] == ["gh", "pr", "view"]:
+            return SimpleNamespace(stdout=json.dumps({"headRefOid": self.head, "state": "OPEN"}))
+        if args[:2] == ["gh", "api"] and "--method" not in args:
+            return SimpleNamespace(stdout=json.dumps({"not": "a list"}))
+        return super().run(args, **kwargs)
+
+
+def _arbiter_decision(round_count: int):
+    return SimpleNamespace(
+        recommendation="CONTINUE",
+        loop_action="CONTINUE",
+        cited_rule="CONTINUE",
+        needs_human=False,
+        round_count=round_count,
+        proposed_gaps=[],
+        detail="",
+    )
+
+
+def test_arbiter_comment_appends_changed_decision_for_same_head(monkeypatch):
+    head = "a" * 40
+    fake = _ArbiterCommentGH(head)
+    monkeypatch.setenv("LOOPKEEPER_OPERATOR", "1")
+    monkeypatch.setattr("loopkeeper.adapters.github.arbiter_io.subprocess.run", fake.run)
+
+    post_arbiter_comment("example/project", 7, _arbiter_decision(1), True)
+    post_arbiter_comment("example/project", 7, _arbiter_decision(2), True)
+
+    assert len(fake.comments) == 2
+    assert not any("--method" in call for call in fake.calls)
+    assert fake.comments[0]["body"] != fake.comments[1]["body"]
+
+
+def test_arbiter_comment_suppresses_exact_decision_retry(monkeypatch):
+    head = "b" * 40
+    fake = _ArbiterCommentGH(head)
+    monkeypatch.setenv("LOOPKEEPER_OPERATOR", "1")
+    monkeypatch.setattr("loopkeeper.adapters.github.arbiter_io.subprocess.run", fake.run)
+
+    decision = _arbiter_decision(1)
+    post_arbiter_comment("example/project", 7, decision, True)
+    post_arbiter_comment("example/project", 7, decision, True)
+
+    assert len(fake.comments) == 1
+    assert not any("--method" in call for call in fake.calls)
+
+
+def test_arbiter_comment_does_not_reuse_legacy_marker(monkeypatch):
+    head = "c" * 40
+    fake = _ArbiterCommentGH(head)
+    fake.comments.append({
+        "id": 99,
+        "user": {"login": "github-actions[bot]"},
+        "body": f"<!-- loopkeeper-arbiter:7:{head} -->\nlegacy disposition",
+    })
+    monkeypatch.setenv("LOOPKEEPER_OPERATOR", "1")
+    monkeypatch.setattr("loopkeeper.adapters.github.arbiter_io.subprocess.run", fake.run)
+
+    post_arbiter_comment("example/project", 7, _arbiter_decision(1), True)
+
+    assert len(fake.comments) == 2
+    assert "legacy disposition" in fake.comments[0]["body"]
+    assert not any("--method" in call for call in fake.calls)
+
+
+def test_arbiter_comment_fails_closed_on_malformed_comment_read(monkeypatch):
+    fake = _MalformedArbiterCommentsGH("d" * 40)
+    monkeypatch.setenv("LOOPKEEPER_OPERATOR", "1")
+    monkeypatch.setattr("loopkeeper.adapters.github.arbiter_io.subprocess.run", fake.run)
+
+    with pytest.raises(RuntimeError, match="could not list comments for arbiter"):
+        post_arbiter_comment("example/project", 7, _arbiter_decision(1), True)
+
+    assert not any(call[:3] == ["gh", "pr", "comment"] for call in fake.calls)
