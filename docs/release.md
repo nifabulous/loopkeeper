@@ -28,10 +28,21 @@ the environment registered with PyPI. The workflow's `publish` input remains
 the human approval gate, and every release requires a manual check of package
 ownership and the reusable-workflow repository namespace.
 
+## Next patch follow-up
+
+Do not cut a patch release solely to improve the PyPI page. The next planned
+patch should add the project README as the package's long description (for
+example, `readme = { file = "README.md", content-type = "text/markdown" }` in
+`[project]`). It should also make wheel and sdist bytes reproducible, then copy
+the exact verified publication artifact into the GitHub Release. Version
+`0.1.1` was published successfully, but its earlier release assets differ from
+the PyPI upload only because archive timestamps changed between builds; future
+release assets must not diverge this way.
+
 Consumer examples are templates until their fixture slug and full SHA are
 replaced. A publishable copy must use a full immutable workflow SHA, keep the
 `uses:` pin and `loopkeeper_sha` input identical, and pin any package install as
-`loopkeeper==0.1.0` with a trusted hash/provenance record.
+`loopkeeper==0.1.1` with a trusted hash/provenance record.
 
 Before Phase 2, complete the staged dogfood: Stage A runs with writes disabled
 and proves coverage, exact-head filtering, privacy, and zero write attempts;

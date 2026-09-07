@@ -26,7 +26,7 @@ reference consumer, alongside issue triage and headless agent execution.
 
 ```bash
 python3.12 -m pip install -e '.[dev]'
-python -m loopkeeper --version   # -> loopkeeper 0.1.0
+python -m loopkeeper --version   # -> loopkeeper 0.1.1
 loopkeeper --version
 python -m pytest -q
 ```
@@ -61,7 +61,7 @@ workflow-name/file resolution tests.
 
 ## Version
 
-Package version is `0.1.0` (see `src/loopkeeper/__init__.py`).
+Package version is `0.1.1` (see `src/loopkeeper/__init__.py`).
 
 ## Security
 

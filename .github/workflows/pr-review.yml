@@ -168,7 +168,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: loopkeeper-pr-review-${{ inputs.consumer_repo }}-${{ inputs.pr_number }}
+      group: loopkeeper-pr-review-readonly-${{ inputs.consumer_repo }}-${{ inputs.pr_number }}
       cancel-in-progress: true
     steps:
       - name: Check out consumer at forge-verified default-branch SHA

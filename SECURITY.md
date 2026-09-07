@@ -8,10 +8,11 @@ boundary are welcome and taken seriously.
 
 | Version | Status |
 |---|---|
-| `0.1.x` | Will be supported once published; `0.1.0` is not yet released |
+| `0.1.x` | Supported |
 | earlier | Not applicable — `0.1.0` is the first release |
 
-Until `0.1.0` is published, report against the current `main`.
+Report against the affected release and include the exact Loopkeeper revision;
+the current `main` is also in scope for unreleased fixes.
 
 ## Reporting a vulnerability
 

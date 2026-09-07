@@ -8,7 +8,7 @@ on:
     inputs:
       issue_number:
         required: true
-        type: string
+        type: number
 
 permissions:
   contents: read
@@ -23,7 +23,7 @@ jobs:
       consumer_trusted_sha: ""
       loopkeeper_sha: 0123456789abcdef0123456789abcdef01234567
       job_timeout_seconds: 1200
-      issue_number: ${{ github.event.issue.number || inputs.issue_number }}
+      issue_number: ${{ fromJSON(format('{0}', github.event.issue.number || inputs.issue_number)) }}
       post_comments: false
     secrets:
       model_api_key: ${{ secrets.LOOPKEEPER_API_KEY }}
