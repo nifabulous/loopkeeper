@@ -155,12 +155,30 @@ def test_example_callers_do_not_advertise_targetless_schedules():
 
 
 def test_caller_uses_pin_and_loopkeeper_sha_input_are_identical():
-    for path in (ROOT / "examples/github").glob("*.yml"):
+    reusable_callers = (
+        "pr-review-caller.yml",
+        "pr-review-posting-caller.yml",
+        "issue-triage-caller.yml",
+        "issue-triage-posting-caller.yml",
+        "agent-caller.yml",
+    )
+    for name in reusable_callers:
+        path = ROOT / "examples/github" / name
         raw = path.read_text(encoding="utf-8")
         use_sha = re.search(r"uses: [^@]+@([0-9a-f]{40})", raw)
         input_sha = re.search(r"loopkeeper_sha:\s*([0-9a-f]{40})", raw)
         assert use_sha and input_sha, path
         assert use_sha.group(1) == input_sha.group(1), path
+
+
+def test_agent_caller_uses_dispatch_only_reusable_workflow_and_cli_callee():
+    caller = (ROOT / "examples/github/agent-caller.yml").read_text(encoding="utf-8")
+    callee = (ROOT / ".github/workflows/agent.yml").read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in caller
+    assert "pull_request_target:" not in caller
+    assert re.search(r"uses: example-org/loopkeeper/.github/workflows/agent.yml@[0-9a-f]{40}", caller)
+    assert "loopkeeper agent" in callee
+    assert "--manifest" in callee
 
 
 def test_posting_and_read_only_callers_have_distinct_permissions():
