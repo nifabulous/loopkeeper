@@ -131,6 +131,26 @@ def test_pr_callers_fan_out_workflow_run_targets_after_current_head_checks(path)
     assert "github.event.workflow_run.pull_requests[0]" not in raw
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        ROOT / ".github/workflows/loopkeeper-pr-review.yml",
+        ROOT / "examples/github/pr-review-caller.yml",
+        ROOT / "examples/github/pr-review-posting-caller.yml",
+    ],
+    ids=lambda path: path.name,
+)
+def test_pr_callers_fail_closed_when_workflow_run_fanout_exceeds_bounds(path):
+    raw = path.read_text(encoding="utf-8")
+
+    assert "MAX_WORKFLOW_RUN_ASSOCIATIONS=20" in raw
+    assert "MAX_WORKFLOW_RUN_TARGETS=8" in raw
+    assert "association_count" in raw
+    assert "association_count > MAX_WORKFLOW_RUN_ASSOCIATIONS" in raw
+    assert "selected_count" in raw
+    assert "selected_count > MAX_WORKFLOW_RUN_TARGETS" in raw
+
+
 def test_caller_pins_remote_workflow_and_keeps_triggers_on_default_branch():
     raw = (ROOT / "examples/github/pr-review-caller.yml").read_text(encoding="utf-8")
     # Assert the required types are present rather than an exact list: the set

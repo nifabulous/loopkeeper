@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -90,6 +91,17 @@ class _MalformedArbiterCommentsGH(_ArbiterCommentGH):
         return super().run(args, **kwargs)
 
 
+class _PaginatedArbiterCommentGH(_ArbiterCommentGH):
+    def run(self, args, **kwargs):
+        if args[:2] == ["gh", "api"] and "--method" not in args:
+            self.calls.append(args)
+            page_match = re.search(r"[?&]page=(\d+)", args[2])
+            page = int(page_match.group(1)) if page_match else 1
+            start = (page - 1) * 100
+            return SimpleNamespace(stdout=json.dumps(self.comments[start : start + 100]))
+        return super().run(args, **kwargs)
+
+
 def _arbiter_decision(round_count: int):
     return SimpleNamespace(
         recommendation="CONTINUE",
@@ -128,6 +140,42 @@ def test_arbiter_comment_suppresses_exact_decision_retry(monkeypatch):
 
     assert len(fake.comments) == 1
     assert not any("--method" in call for call in fake.calls)
+
+
+def test_arbiter_comment_suppresses_retry_when_marker_is_on_second_page(monkeypatch):
+    head = "e" * 40
+    fake = _PaginatedArbiterCommentGH(head)
+    monkeypatch.setenv("LOOPKEEPER_OPERATOR", "1")
+    monkeypatch.setattr("loopkeeper.adapters.github.arbiter_io.subprocess.run", fake.run)
+
+    decision = _arbiter_decision(1)
+    post_arbiter_comment("example/project", 7, decision, True)
+    exact_comment = fake.comments[0]
+    fake.comments[:0] = [
+        {"id": index + 2, "user": {"login": "someone-else"}, "body": "filler"}
+        for index in range(100)
+    ]
+
+    post_arbiter_comment("example/project", 7, decision, True)
+
+    marker = exact_comment["body"].splitlines()[0]
+    assert sum(marker in comment["body"] for comment in fake.comments) == 1
+    assert any("page=2" in call[2] for call in fake.calls if call[:2] == ["gh", "api"])
+
+
+def test_arbiter_comment_fails_closed_when_comment_page_cap_is_reached(monkeypatch):
+    fake = _PaginatedArbiterCommentGH("f" * 40)
+    fake.comments = [
+        {"id": index + 1, "user": {"login": "someone-else"}, "body": "filler"}
+        for index in range(1000)
+    ]
+    monkeypatch.setenv("LOOPKEEPER_OPERATOR", "1")
+    monkeypatch.setattr("loopkeeper.adapters.github.arbiter_io.subprocess.run", fake.run)
+
+    with pytest.raises(RuntimeError, match="page cap"):
+        post_arbiter_comment("example/project", 7, _arbiter_decision(1), True)
+
+    assert len(fake.comments) == 1000
 
 
 def test_arbiter_comment_does_not_reuse_legacy_marker(monkeypatch):

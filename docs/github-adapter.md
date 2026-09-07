@@ -87,6 +87,10 @@ and passes PR content only through the untrusted channel.
   already published the same decision. The posting workflow should still use
   PR-scoped serialization because GitHub comments do not provide a unique
   constraint for two simultaneous creates.
+- Both arbiter reconciliation reads search at most 10 pages of 100 comments
+  and enforce the shared raw-byte cap. Reaching either cap or failing any page
+  makes the evidence unavailable and aborts publication; a marker beyond the
+  first page therefore still suppresses an exact retry.
 
 ## `workflow_run` target fan-out
 
@@ -95,6 +99,10 @@ and passes PR content only through the untrusted channel.
   each PR through the GitHub API, and retain only PRs that are still `open`
   with a head SHA exactly equal to the completed run's SHA. If any target
   cannot be verified, the caller selects no targets rather than guessing.
+- Callers accept at most 20 association entries before making per-PR API
+  reads, and at most 8 verified exact-head targets before creating the matrix.
+  Exactly 20 associations and exactly 8 targets are allowed; exceeding either
+  boundary fails closed with an empty target set.
 - The reusable workflow receives one explicit `pr_number` per matrix entry.
   It no longer falls back to `workflow_run.pull_requests[0]`, so a shared CI
   run cannot silently review only the first associated PR. Each matrix job has

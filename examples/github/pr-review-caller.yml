@@ -46,6 +46,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          MAX_WORKFLOW_RUN_ASSOCIATIONS=20
+          MAX_WORKFLOW_RUN_TARGETS=8
           [[ "$GH_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "repository must be owner/name" >&2; exit 2; }
           if [[ "$EVENT_NAME" != "workflow_run" ]]; then
             [[ "$DIRECT_PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "a PR number is required" >&2; exit 2; }
@@ -64,6 +66,12 @@ jobs:
             echo 'pr_numbers=[]' >>"$GITHUB_OUTPUT"
             exit 0
           }
+          association_count="$(jq 'length' <<<"$RUN_PULL_REQUESTS")"
+          if (( association_count > MAX_WORKFLOW_RUN_ASSOCIATIONS )); then
+            echo "workflow_run associated $association_count PRs; maximum is $MAX_WORKFLOW_RUN_ASSOCIATIONS; selecting no PRs." >&2
+            echo 'pr_numbers=[]' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
           targets_file="$(mktemp)"; response_file="$(mktemp)"
           trap 'rm -f "$targets_file" "$response_file"' EXIT
           declare -A seen=(); selection_unavailable=0
@@ -81,6 +89,11 @@ jobs:
           done < <(jq -r '.[].number // empty' <<<"$RUN_PULL_REQUESTS")
           if (( selection_unavailable )); then
             echo "one or more associated PRs were unverifiable; selecting no PRs." >&2
+            echo 'pr_numbers=[]' >>"$GITHUB_OUTPUT"; exit 0
+          fi
+          selected_count="$(wc -l <"$targets_file" | tr -d ' ')"
+          if (( selected_count > MAX_WORKFLOW_RUN_TARGETS )); then
+            echo "$selected_count exact-head PRs matched; maximum is $MAX_WORKFLOW_RUN_TARGETS; selecting no PRs." >&2
             echo 'pr_numbers=[]' >>"$GITHUB_OUTPUT"; exit 0
           fi
           if [[ -s "$targets_file" ]]; then pr_numbers="$(jq -Rsc 'split("\n") | map(select(length > 0) | tonumber)' <"$targets_file")"; else pr_numbers='[]'; fi

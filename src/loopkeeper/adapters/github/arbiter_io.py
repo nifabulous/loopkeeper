@@ -153,6 +153,40 @@ def _bounded_retry(call, max_attempts: int = 3, base_delay: float = 0.5):
     raise last_exc if last_exc else RuntimeError("retry exhausted")
 
 
+def _read_arbiter_comments(repo: str, pr: int) -> list[dict]:
+    """Read a complete, bounded comment history for arbiter reconciliation."""
+    per_page = 100
+    max_pages = 10
+    max_raw_bytes = _bounded_positive_env("LOOPKEEPER_CHECK_MAX_RAW_BYTES", 200_000)
+    collected_raw_bytes = 0
+    comments: list[dict] = []
+
+    for page in range(1, max_pages + 1):
+        result = subprocess.run(
+            [
+                "gh",
+                "api",
+                f"repos/{repo}/issues/{pr}/comments?per_page={per_page}&page={page}",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=20,
+        )
+        page_comments = json.loads(result.stdout)
+        if not isinstance(page_comments, list):
+            raise RuntimeError(f"arbiter comment page {page} was not a JSON array")
+        page_raw_bytes = len(json.dumps(page_comments, ensure_ascii=False).encode("utf-8"))
+        if collected_raw_bytes + page_raw_bytes > max_raw_bytes:
+            raise RuntimeError("arbiter comment history exceeded the configured byte cap")
+        collected_raw_bytes += page_raw_bytes
+        comments.extend(page_comments)
+        if len(page_comments) < per_page:
+            return comments
+
+    raise RuntimeError("arbiter comment history exceeded the configured page cap")
+
+
 def collect_history(repo: str, pr: int, trusted_sha: str, bot_login: str) -> History:
     """Collect PR history via bounded GitHub API and build a History.
 
@@ -504,18 +538,9 @@ def post_arbiter_comment(repo: str, pr: int, decision, operator: bool) -> None:
         if os.environ.get("LOOPKEEPER_OPERATOR") != "1":
             raise PermissionError("LOOPKEEPER_OPERATOR=1 required for arbiter post")
 
-    # Fetch comments bounded
+    # Fetch the complete comment history within explicit page and byte caps.
     try:
-        result = subprocess.run(
-            ["gh", "api", f"repos/{repo}/issues/{pr}/comments?per_page=100"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=20,
-        )
-        comments = json.loads(result.stdout)
-        if not isinstance(comments, list):
-            raise RuntimeError("arbiter comment read was not a JSON array")
+        comments = _read_arbiter_comments(repo, pr)
     except Exception as exc:
         raise RuntimeError(f"could not list comments for arbiter: {exc}") from exc
 
@@ -548,16 +573,7 @@ def post_arbiter_comment(repo: str, pr: int, decision, operator: bool) -> None:
         state2 = data2.get("state") or "OPEN"
         if state2 != "OPEN" or head2 != current_head:
             return
-        result3 = subprocess.run(
-            ["gh", "api", f"repos/{repo}/issues/{pr}/comments?per_page=100"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=20,
-        )
-        comments2 = json.loads(result3.stdout)
-        if not isinstance(comments2, list):
-            raise RuntimeError("arbiter comment read was not a JSON array")
+        comments2 = _read_arbiter_comments(repo, pr)
         if has_exact_decision(comments2):
             return
     except Exception as exc:
