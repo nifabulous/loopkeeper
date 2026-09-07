@@ -21,7 +21,7 @@ import json
 import os
 import re
 import subprocess
-import tempfile
+import threading
 import time
 from typing import Protocol
 
@@ -164,23 +164,62 @@ def _read_arbiter_comments(repo: str, pr: int) -> list[dict]:
 
     for page in range(1, max_pages + 1):
         remaining_bytes = max_raw_bytes - collected_raw_bytes
-        with tempfile.TemporaryFile() as raw_output:
-            subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{repo}/issues/{pr}/comments?per_page={per_page}&page={page}",
-                ],
-                stdout=raw_output,
-                stderr=subprocess.DEVNULL,
-                check=True,
-                timeout=20,
-            )
-            page_raw_bytes = raw_output.tell()
-            if page_raw_bytes > remaining_bytes:
-                raise RuntimeError("arbiter comment history exceeded the configured byte cap")
-            raw_output.seek(0)
-            page_payload = raw_output.read(remaining_bytes + 1)
+        process = subprocess.Popen(
+            [
+                "gh",
+                "api",
+                f"repos/{repo}/issues/{pr}/comments?per_page={per_page}&page={page}",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        if process.stdout is None:
+            process.kill()
+            raise RuntimeError("could not stream arbiter comment page")
+
+        timed_out = threading.Event()
+
+        def kill_on_timeout() -> None:
+            timed_out.set()
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+        timer = threading.Timer(20, kill_on_timeout)
+        timer.daemon = True
+        timer.start()
+        chunks: list[bytes] = []
+        page_raw_bytes = 0
+        try:
+            while True:
+                chunk = process.stdout.read(min(65_536, remaining_bytes - page_raw_bytes + 1))
+                if not chunk:
+                    break
+                page_raw_bytes += len(chunk)
+                if page_raw_bytes > remaining_bytes:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                    raise RuntimeError("arbiter comment history exceeded the configured byte cap")
+                chunks.append(chunk)
+            return_code = process.wait()
+            if timed_out.is_set():
+                raise RuntimeError(f"arbiter comment page {page} timed out")
+            if return_code != 0:
+                raise RuntimeError(f"arbiter comment page {page} exited with status {return_code}")
+            page_payload = b"".join(chunks)
+        finally:
+            timer.cancel()
+            process.stdout.close()
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+                process.wait()
 
         try:
             page_comments = json.loads(page_payload.decode("utf-8"))
