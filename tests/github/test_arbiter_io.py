@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ from loopkeeper.adapters.github.arbiter_io import (
     CollectionUnavailable,
     _collect_with_api,
     _collect_with_gh,
+    _read_arbiter_comments,
     post_arbiter_comment,
 )
 
@@ -67,7 +69,11 @@ class _ArbiterCommentGH:
         if args[:3] == ["gh", "pr", "view"]:
             return SimpleNamespace(stdout=json.dumps({"headRefOid": self.head, "state": "OPEN"}))
         if args[:2] == ["gh", "api"] and "--method" not in args:
-            return SimpleNamespace(stdout=json.dumps(self.comments))
+            payload = json.dumps(self.comments)
+            if output := kwargs.get("stdout"):
+                output.write(payload.encode("utf-8"))
+                return SimpleNamespace(returncode=0)
+            return SimpleNamespace(stdout=payload)
         if args[:3] == ["gh", "pr", "comment"]:
             body = kwargs["input"].decode("utf-8")
             self.comments.append({
@@ -87,7 +93,11 @@ class _MalformedArbiterCommentsGH(_ArbiterCommentGH):
         if args[:3] == ["gh", "pr", "view"]:
             return SimpleNamespace(stdout=json.dumps({"headRefOid": self.head, "state": "OPEN"}))
         if args[:2] == ["gh", "api"] and "--method" not in args:
-            return SimpleNamespace(stdout=json.dumps({"not": "a list"}))
+            payload = json.dumps({"not": "a list"})
+            if output := kwargs.get("stdout"):
+                output.write(payload.encode("utf-8"))
+                return SimpleNamespace(returncode=0)
+            return SimpleNamespace(stdout=payload)
         return super().run(args, **kwargs)
 
 
@@ -98,7 +108,11 @@ class _PaginatedArbiterCommentGH(_ArbiterCommentGH):
             page_match = re.search(r"[?&]page=(\d+)", args[2])
             page = int(page_match.group(1)) if page_match else 1
             start = (page - 1) * 100
-            return SimpleNamespace(stdout=json.dumps(self.comments[start : start + 100]))
+            payload = json.dumps(self.comments[start : start + 100])
+            if output := kwargs.get("stdout"):
+                output.write(payload.encode("utf-8"))
+                return SimpleNamespace(returncode=0)
+            return SimpleNamespace(stdout=payload)
         return super().run(args, **kwargs)
 
 
@@ -176,6 +190,30 @@ def test_arbiter_comment_fails_closed_when_comment_page_cap_is_reached(monkeypat
         post_arbiter_comment("example/project", 7, _arbiter_decision(1), True)
 
     assert len(fake.comments) == 1000
+
+
+def test_arbiter_comment_rejects_oversized_page_before_json_parse(tmp_path, monkeypatch):
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdout.write('[' + ('x' * 1024) + ']')\n",
+        encoding="utf-8",
+    )
+    fake_gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("LOOPKEEPER_CHECK_MAX_RAW_BYTES", "64")
+    real_loads = json.loads
+
+    def reject_oversized_parse(raw):
+        if isinstance(raw, str) and len(raw.encode("utf-8")) > 64:
+            raise AssertionError("oversized response reached JSON parsing")
+        return real_loads(raw)
+
+    monkeypatch.setattr("loopkeeper.adapters.github.arbiter_io.json.loads", reject_oversized_parse)
+
+    with pytest.raises(RuntimeError, match="byte cap"):
+        _read_arbiter_comments("example/project", 7)
 
 
 def test_arbiter_comment_does_not_reuse_legacy_marker(monkeypatch):

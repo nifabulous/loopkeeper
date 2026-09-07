@@ -21,6 +21,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import time
 from typing import Protocol
 
@@ -162,23 +163,31 @@ def _read_arbiter_comments(repo: str, pr: int) -> list[dict]:
     comments: list[dict] = []
 
     for page in range(1, max_pages + 1):
-        result = subprocess.run(
-            [
-                "gh",
-                "api",
-                f"repos/{repo}/issues/{pr}/comments?per_page={per_page}&page={page}",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=20,
-        )
-        page_comments = json.loads(result.stdout)
+        remaining_bytes = max_raw_bytes - collected_raw_bytes
+        with tempfile.TemporaryFile() as raw_output:
+            subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repo}/issues/{pr}/comments?per_page={per_page}&page={page}",
+                ],
+                stdout=raw_output,
+                stderr=subprocess.DEVNULL,
+                check=True,
+                timeout=20,
+            )
+            page_raw_bytes = raw_output.tell()
+            if page_raw_bytes > remaining_bytes:
+                raise RuntimeError("arbiter comment history exceeded the configured byte cap")
+            raw_output.seek(0)
+            page_payload = raw_output.read(remaining_bytes + 1)
+
+        try:
+            page_comments = json.loads(page_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"arbiter comment page {page} was not valid UTF-8 JSON") from exc
         if not isinstance(page_comments, list):
             raise RuntimeError(f"arbiter comment page {page} was not a JSON array")
-        page_raw_bytes = len(json.dumps(page_comments, ensure_ascii=False).encode("utf-8"))
-        if collected_raw_bytes + page_raw_bytes > max_raw_bytes:
-            raise RuntimeError("arbiter comment history exceeded the configured byte cap")
         collected_raw_bytes += page_raw_bytes
         comments.extend(page_comments)
         if len(page_comments) < per_page:

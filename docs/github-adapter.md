@@ -88,9 +88,11 @@ and passes PR content only through the untrusted channel.
   PR-scoped serialization because GitHub comments do not provide a unique
   constraint for two simultaneous creates.
 - Both arbiter reconciliation reads search at most 10 pages of 100 comments
-  and enforce the shared raw-byte cap. Reaching either cap or failing any page
-  makes the evidence unavailable and aborts publication; a marker beyond the
-  first page therefore still suppresses an exact retry.
+  and enforce the shared raw-byte cap. Each page is first spooled to a
+  temporary file, sized against the remaining budget, and only then loaded
+  into memory and parsed as JSON. Reaching either cap or failing any page makes
+  the evidence unavailable and aborts publication; a marker beyond the first
+  page therefore still suppresses an exact retry.
 
 ## `workflow_run` target fan-out
 
