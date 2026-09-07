@@ -69,6 +69,52 @@ and passes PR content only through the untrusted channel.
   reservation. Marker-like text in model output is escaped and cannot satisfy
   suppression.
 
+## Arbiter disposition comments
+
+- Arbiter history is append-only. A new disposition is published as a new
+  comment; an earlier disposition is never patched or replaced.
+- New arbiter comments carry
+  `<!-- loopkeeper-arbiter:{pr}:{head_sha}:{decision_digest} -->`, where the
+  digest is a canonical SHA-256 fingerprint of the public decision fields.
+  Retrying the exact same PR/head/decision is therefore a no-op, while a
+  changed recommendation, rule, round count, human flag, gap ledger, or detail
+  creates a distinct timeline event.
+- The reader remains compatible with the old two-part marker so existing
+  history can still be inspected, but old comments are deliberately not
+  edited or reused as the target of a write.
+- The writer re-reads the head and comments immediately before creation and
+  abandons the write if the head moved, the PR closed, or another writer
+  already published the same decision. The posting workflow should still use
+  PR-scoped serialization because GitHub comments do not provide a unique
+  constraint for two simultaneous creates.
+- Both arbiter reconciliation reads search at most 10 pages of 100 comments
+  and enforce the shared raw-byte cap. Each `gh` response is streamed in
+  bounded chunks, and the subprocess is terminated as soon as it crosses the
+  remaining byte budget; only an in-budget response is parsed as JSON.
+  Reaching either cap or failing any page makes the evidence unavailable and
+  aborts publication; a marker beyond the first page therefore still
+  suppresses an exact retry.
+
+## `workflow_run` target fan-out
+
+- Caller workflows first build a bounded PR-number matrix. For a
+  `workflow_run`, they de-duplicate the event's associated PR numbers, fetch
+  each PR through the GitHub API, and retain only PRs that are still `open`
+  with a head SHA exactly equal to the completed run's SHA. If any target
+  cannot be verified, the caller selects no targets rather than guessing.
+- Callers accept at most 20 association entries before making per-PR API
+  reads, and at most 8 verified exact-head targets before creating the matrix.
+  Exactly 20 associations and exactly 8 targets are allowed; exceeding either
+  boundary fails closed with an empty target set.
+- The reusable workflow receives one explicit `pr_number` per matrix entry.
+  It no longer falls back to `workflow_run.pull_requests[0]`, so a shared CI
+  run cannot silently review only the first associated PR. Each matrix job has
+  its own PR-scoped concurrency group and exact-head guard.
+- The pure `select_workflow_run_target` predicate still rejects a missing or
+  duplicated occurrence of the target PR, but distinct sibling PR numbers are
+  valid and are evaluated independently. This is the intended multi-PR
+  fan-out contract.
+
 ## Writer serialization
 
 - Run a dedicated PR-scoped writer job with `cancel-in-progress: false`,
@@ -99,7 +145,7 @@ and passes PR content only through the untrusted channel.
 - `resolve_consumer_trusted_sha(repo: str, default_branch: str, api: GitHubApi) -> str`
 - `verify_loopkeeper_checkout(root: Path, expected_sha: str, release_manifest: Path) -> None`
 - `resolve_workflow_target(repo: str, display_name: str, expected_file: str, api: GitHubApi, max_pages: int=10) -> WorkflowTarget`
-- `select_workflow_run_target(event: str, source_event: str, run_head_sha: str, current_pr_head_sha: str, pr_state: str, target_pr: int, run_pull_request_numbers: Sequence[int]) -> Reviewability`
+- `select_workflow_run_target(event: str, source_event: str, run_head_sha: str, current_pr_head_sha: str, pr_state: str, target_pr: int, run_pull_request_numbers: Sequence[int]) -> Reviewability` (allows distinct sibling associations; rejects missing or duplicate target entries)
 - `decide_comment_action(existing: Sequence[CommentState], evidence_state: Literal["fallback","ci"], head_sha: str) -> CommentAction`
 - `render_comment(model_markdown: str, marker: str, evidence_state: Literal["fallback","ci"], max_bytes: int) -> str`
 - `verify_gap_label(repo: str, label: str, api: GitHubApi) -> None`

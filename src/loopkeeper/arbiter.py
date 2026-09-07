@@ -60,8 +60,8 @@ _BOT_LOGIN = "github-actions[bot]"
 class ArbiterConfig:
     soft_gate: int = 5
     hard_cap: int = 10
-    stuck_p1_rounds: int = 3
-    unverifiable_rounds: int = 2
+    stuck_p1_rounds: int = 5
+    unverifiable_rounds: int = 5
 
     def __post_init__(self):
         for name in ("soft_gate", "hard_cap", "stuck_p1_rounds", "unverifiable_rounds"):

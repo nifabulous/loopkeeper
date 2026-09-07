@@ -140,8 +140,44 @@ def test_pr21_outcome_is_computed_then_pinned():
     assert decision.round_count == 7
     assert decision.needs_human is True
     firing_round, firing_decision = _first_firing_round(history, contract)
-    assert firing_round == 3
+    assert firing_round == 5
     assert firing_decision.cited_rule == "STUCK-P1"
+
+
+def test_default_stuck_p1_threshold_waits_until_five_rounds():
+    comments = [
+        _comment(
+            n,
+            n,
+            [_finding("P1", "NEW" if n == 1 else "OPEN", "app/auth.py", "authorization", "authz")],
+        )
+        for n in range(1, 6)
+    ]
+
+    firing_round, decision = _first_firing_round(_history(comments), _contract())
+
+    assert firing_round == 5
+    assert decision is not None
+    assert decision.cited_rule == "STUCK-P1"
+
+
+def test_default_stuck_p1_boundary_is_four_five_and_six_rounds():
+    def round_comment(n):
+        return _comment(
+            n,
+            n,
+            [_finding("P1", "NEW" if n == 1 else "OPEN", "app/auth.py", "authorization", "authz")],
+        )
+
+    histories = [_history([round_comment(n) for n in range(1, count + 1)]) for count in (4, 5, 6)]
+
+    before_threshold = arb.decide(histories[0], _contract())
+    at_threshold = arb.decide(histories[1], _contract())
+    after_threshold = arb.decide(histories[2], _contract())
+
+    assert before_threshold.cited_rule != "STUCK-P1"
+    assert at_threshold.cited_rule == "STUCK-P1"
+    assert after_threshold.cited_rule == "STUCK-P1"
 
 
 # --------------------------------------------------------------------------- #
@@ -242,9 +278,12 @@ def test_dropped_open_p1_is_needs_human_never_merge_clean():
 def test_renamed_slug_same_file_cat_as_new_is_ambiguous_identity():
     r1 = _comment(1, 1, [_finding("P1", "NEW", "app/models.py", "authz", "published-self-assert")])
     r2 = _comment(2, 2, [_finding("P1", "OPEN", "app/models.py", "authz", "published-self-assert")])
+    repeated = [
+        _comment(n, n, [_finding("P1", "OPEN", "app/models.py", "authz", "published-self-assert")])
+        for n in range(3, 6)
+    ]
     kept_open = arb.decide(
-        _history([r1, r2, _comment(3, 3, [
-            _finding("P1", "OPEN", "app/models.py", "authz", "published-self-assert")])]),
+        _history([r1, r2, *repeated]),
         _contract(),
     )
     assert kept_open.cited_rule == "STUCK-P1"
@@ -327,6 +366,14 @@ def test_stuck_p1_beats_minor_repeats():
             _finding("P2", "OPEN", "app/a.py", "cat-a", "a"),
         ]),
         _comment(3, 3, [
+            _finding("P1", "OPEN", "app/models.py", "authz", "p1"),
+            _finding("P2", "OPEN", "app/a.py", "cat-a", "a"),
+        ]),
+        _comment(4, 4, [
+            _finding("P1", "OPEN", "app/models.py", "authz", "p1"),
+            _finding("P2", "OPEN", "app/a.py", "cat-a", "a"),
+        ]),
+        _comment(5, 5, [
             _finding("P1", "OPEN", "app/models.py", "authz", "p1"),
             _finding("P2", "OPEN", "app/a.py", "cat-a", "a"),
         ]),
@@ -632,17 +679,33 @@ def test_repeated_unverifiable_minor_enters_gap_ledger_not_clean():
     assert decision.proposed_gaps[0]["missing"] == "exact-head check result"
 
 
-def test_unverifiable_round_cap_escalates_on_third_consecutive_round():
+def test_default_unverifiable_round_cap_allows_five_then_escalates_on_sixth_round():
     def round_comment(n, state):
         return _comment(n, n, [_finding(
             "P2", state, "app/a.py", "verification", "missing-proof",
             unverifiable={"missing": "exact-head check result"},
         )])
-    comments = [
-        round_comment(1, "NEW"),
-        round_comment(2, "OPEN"),
-        round_comment(3, "OPEN"),
-    ]
+    comments = [round_comment(1, "NEW")] + [round_comment(n, "OPEN") for n in range(2, 7)]
+
+    before_cap = arb.decide(_history(comments[:4]), _contract())
+    at_cap = arb.decide(_history(comments[:5]), _contract())
+    after_cap = arb.decide(_history(comments), _contract())
+
+    assert before_cap.cited_rule != "UNVERIFIABLE-ROUND-CAP"
+    assert at_cap.cited_rule != "UNVERIFIABLE-ROUND-CAP"
+
+    assert after_cap.recommendation == "ESCALATE-TO-SCOPING"
+    assert after_cap.cited_rule == "UNVERIFIABLE-ROUND-CAP"
+
+
+def test_custom_unverifiable_round_cap_still_escalates_after_more_than_configured_rounds():
+    def round_comment(n, state):
+        return _comment(n, n, [_finding(
+            "P2", state, "app/a.py", "verification", "missing-proof",
+            unverifiable={"missing": "exact-head check result"},
+        )])
+
+    comments = [round_comment(1, "NEW"), round_comment(2, "OPEN"), round_comment(3, "OPEN")]
     decision = arb.decide(_history(comments), _contract(unverifiable_rounds=2))
     assert decision.recommendation == "ESCALATE-TO-SCOPING"
     assert decision.cited_rule == "UNVERIFIABLE-ROUND-CAP"
@@ -765,6 +828,13 @@ def test_arbiter_config_rejects_non_positive_thresholds():
         arb.ArbiterConfig(stuck_p1_rounds=0)
     with pytest.raises(ValueError):
         arb.ArbiterConfig(unverifiable_rounds=0)
+
+
+def test_arbiter_config_defaults_use_five_round_review_boundaries():
+    config = arb.ArbiterConfig()
+
+    assert config.stuck_p1_rounds == 5
+    assert config.unverifiable_rounds == 5
 
 def test_decide_is_pure_no_env_filesystem_network():
     import inspect
