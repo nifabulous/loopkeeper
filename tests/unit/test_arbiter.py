@@ -161,6 +161,25 @@ def test_default_stuck_p1_threshold_waits_until_five_rounds():
     assert decision.cited_rule == "STUCK-P1"
 
 
+def test_default_stuck_p1_boundary_is_four_five_and_six_rounds():
+    def round_comment(n):
+        return _comment(
+            n,
+            n,
+            [_finding("P1", "NEW" if n == 1 else "OPEN", "app/auth.py", "authorization", "authz")],
+        )
+
+    histories = [_history([round_comment(n) for n in range(1, count + 1)]) for count in (4, 5, 6)]
+
+    before_threshold = arb.decide(histories[0], _contract())
+    at_threshold = arb.decide(histories[1], _contract())
+    after_threshold = arb.decide(histories[2], _contract())
+
+    assert before_threshold.cited_rule != "STUCK-P1"
+    assert at_threshold.cited_rule == "STUCK-P1"
+    assert after_threshold.cited_rule == "STUCK-P1"
+
+
 # --------------------------------------------------------------------------- #
 # Fail-closed: malformed / missing trailers.
 # --------------------------------------------------------------------------- #
@@ -668,12 +687,15 @@ def test_default_unverifiable_round_cap_allows_five_then_escalates_on_sixth_roun
         )])
     comments = [round_comment(1, "NEW")] + [round_comment(n, "OPEN") for n in range(2, 7)]
 
-    before_cap = arb.decide(_history(comments[:5]), _contract())
-    assert before_cap.cited_rule != "UNVERIFIABLE-ROUND-CAP"
+    before_cap = arb.decide(_history(comments[:4]), _contract())
+    at_cap = arb.decide(_history(comments[:5]), _contract())
+    after_cap = arb.decide(_history(comments), _contract())
 
-    at_cap = arb.decide(_history(comments), _contract())
-    assert at_cap.recommendation == "ESCALATE-TO-SCOPING"
-    assert at_cap.cited_rule == "UNVERIFIABLE-ROUND-CAP"
+    assert before_cap.cited_rule != "UNVERIFIABLE-ROUND-CAP"
+    assert at_cap.cited_rule != "UNVERIFIABLE-ROUND-CAP"
+
+    assert after_cap.recommendation == "ESCALATE-TO-SCOPING"
+    assert after_cap.cited_rule == "UNVERIFIABLE-ROUND-CAP"
 
 
 def test_custom_unverifiable_round_cap_still_escalates_after_more_than_configured_rounds():
