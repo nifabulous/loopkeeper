@@ -341,7 +341,32 @@ def test_triage_never_calls_git_show_after_failed_trust_guard(tmp_path):
         assert _write_calls(invocations) == [], kwargs
 
 
-def test_triage_uses_code_review_redaction_for_issue_evidence():
-    source = TRIAGE.read_text(encoding="utf-8")
+def _unprofiled_sanitize_calls(source: str) -> list[str]:
+    """Invocations of a sanitizer that do not name the code-review profile.
 
-    assert source.count("--profile code-review") == 1
+    Each call is read together with its backslash continuations, because the
+    profile is usually on a following line.
+    """
+    lines = source.splitlines()
+    offenders = []
+    for index, line in enumerate(lines):
+        if "loopkeeper.redaction" not in line and "loopkeeper.review_output" not in line:
+            continue
+        invocation = [line]
+        cursor = index
+        while cursor < len(lines) - 1 and lines[cursor].rstrip().endswith("\\"):
+            cursor += 1
+            invocation.append(lines[cursor])
+        joined = "\n".join(invocation)
+        if "loopkeeper.review_output" in joined and "--sanitize" not in joined:
+            continue  # --validate and bounding do not redact
+        if "--profile code-review" not in joined:
+            offenders.append(joined)
+    return offenders
+
+
+def test_triage_uses_code_review_redaction_for_issue_evidence():
+    """Issue metadata and triage output are sanitized under the same profile."""
+    offenders = _unprofiled_sanitize_calls(TRIAGE.read_text(encoding="utf-8"))
+
+    assert not offenders, "unprofiled sanitize call(s):\n" + "\n--\n".join(offenders)

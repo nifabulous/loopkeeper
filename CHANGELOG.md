@@ -28,6 +28,18 @@ corresponding evidence record.
 
 ### Fixed
 
+- Model output is sanitized under the same redaction profile as the inputs it
+  was derived from. Every input pass in both adapters names `code-review`,
+  while the three output passes took the default `payments` profile, so a
+  commit SHA in review prose had the nine-digit run inside it replaced by an
+  account placeholder. The SHA is what binds a review to the commit it
+  reviewed: a corrupted one cannot be compared against `git log`, and the same
+  value stayed intact in the comment marker two lines below it, so the
+  substitution protected nothing. `sanitize_review_output` and `render_comment`
+  now take a profile, `loopkeeper.review_output --sanitize` accepts
+  `--profile`, and both adapters pass `code-review`. The default stays
+  `payments`, so a caller that does not choose is unaffected. No redaction rule
+  was changed: the `code-review` profile already protected hexadecimal digests.
 - A pull request can no longer lose its review to its own read-only run. The
   review concurrency group was keyed on repository and pull request alone, so
   the `pull_request_target` run and the `workflow_run` run shared it with
