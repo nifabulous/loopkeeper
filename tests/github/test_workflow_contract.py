@@ -724,3 +724,36 @@ def test_the_eligibility_job_keeps_the_issues_scope_its_probe_needs():
     ):
         granted = _workflow_permissions((ROOT / name).read_text(encoding="utf-8"))
         assert granted.get("issues") == "read", name
+
+
+def test_review_concurrency_is_scoped_per_event_but_the_writer_is_not():
+    """A fallback review must not be able to cancel a CI-evidenced one.
+
+    On pull request #42 the read-only pull_request_target review job started
+    four seconds after the workflow_run review job, shared its concurrency
+    group, and cancelled it. The surviving run carried fallback evidence and
+    produced no artifact, so its writer skipped and the pull request received
+    no review at all -- with ten green checks.
+
+    The review group therefore carries the event. The writer group deliberately
+    does not: writers must still serialize across events so the evidence rules
+    decide which result survives, rather than two writers racing on the same
+    comment.
+    """
+    for name in ("pr-review.yml", "pr-review-posting.yml"):
+        raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+        review_group = re.search(
+            r"group: loopkeeper-pr-review-(?:posting|readonly)-[^\n]*", raw
+        )
+        assert review_group, name
+        assert "github.event_name" in review_group.group(0), (
+            f"{name}: a review group without the event lets a fallback run "
+            f"cancel the CI-evidenced one"
+        )
+
+    posting = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")
+    writer_group = re.search(r"group: loopkeeper-pr-review-writer-[^\n]*", posting)
+    assert writer_group, "writer group missing"
+    assert "github.event_name" not in writer_group.group(0), (
+        "writers must serialize across events, or two results race on one comment"
+    )
