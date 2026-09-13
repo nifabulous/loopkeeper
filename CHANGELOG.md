@@ -28,6 +28,17 @@ corresponding evidence record.
 
 ### Fixed
 
+- A pull request can no longer lose its review to its own read-only run. The
+  review concurrency group was keyed on repository and pull request alone, so
+  the `pull_request_target` run and the `workflow_run` run shared it with
+  `cancel-in-progress: true`. On a small change, where CI finishes before the
+  read-only run has started reviewing, the fallback run cancelled the
+  CI-evidenced one; the survivor produced no artifact, its writer skipped, and
+  the pull request received no review at all while every check reported green.
+  The review group now carries the event. The writer group deliberately does
+  not, so results still serialize across events and the evidence rules decide
+  which survives -- a fallback review never overwrites published CI evidence.
+  Both reviews may now run for the same head, which costs one extra model call.
 - The prompt no longer describes a defanged source placeholder in a way that
   invites reviewing it as source. `[source-placeholder-literal]` replaces any
   bracketed uppercase token the source contained, so untrusted content cannot
