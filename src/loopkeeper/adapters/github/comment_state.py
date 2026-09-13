@@ -226,12 +226,26 @@ def decide_comment_action(
     if current.evidence_state == "fallback" and evidence_state == "ci":
         return CommentAction("REPLACE_FALLBACK", canonical_id=current.comment_id)
     if current.evidence_state == "ci" and evidence_state == "ci":
-        # A second CI-evidenced review of the same head is a re-run of the
-        # consumer's checks, not a repeat of the same result: it is backed by a
-        # different CI run and can carry different evidence. Suppressing it
-        # discarded a completed review whose findings the published comment
-        # contradicted. Replacing keeps one comment per head and publishes the
-        # newer result.
+        # A second CI-evidenced review of the same head usually comes from a
+        # re-run of the consumer's checks and carries different evidence, so
+        # suppressing it discarded a completed review whose findings the
+        # published comment contradicted. Replacing keeps one comment per head
+        # and publishes this result.
+        #
+        # This function does not verify that the new review is newer. It
+        # receives no run identifier or completion time, so it cannot: the
+        # result is last-writer-wins, and a replayed delivery of the same run
+        # rewrites the comment with an equivalent body.
+        #
+        # Ordering comes from the workflow, not from here. The review job is
+        # cancel-in-progress, so a superseded review never reaches its writer,
+        # and the writer job is non-cancelable and serialized per pull request,
+        # so writers apply in completion order. The published comment is
+        # therefore the latest CI review to complete. Both settings are
+        # load-bearing for that and are pinned by the workflow contract tests.
+        # Carrying run identity in the marker would make the rule self-evident
+        # here instead of distributed across two files; that is a marker-format
+        # change and is deliberately not attempted in this fix.
         #
         # Only the CI pair replaces. A fallback review has no backing run, so a
         # second one at the same head is the same review triggered again -- a

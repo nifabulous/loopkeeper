@@ -1119,13 +1119,19 @@ if [[ "$CANONICAL_STATE" == "fallback" && "$EVIDENCE_STATE" == "ci" ]]; then
     record_write_action "replaced_fallback"
   fi
 elif [[ "$CANONICAL_STATE" == "ci" && "$EVIDENCE_STATE" == "ci" ]]; then
-  # A second CI-evidenced review of the same head comes from a re-run of the
-  # consumer's checks, so it is backed by a different CI run and may carry
-  # different evidence. This branch previously fell through to the no-write
-  # path and reported the comment state as already current, which discarded a
-  # completed review and published the claim that nothing had changed. The
-  # review side deliberately exempts workflow_run from the already-reviewed
-  # short-circuit precisely so this re-review can happen; both sides now agree.
+  # A second CI-evidenced review of the same head usually comes from a re-run
+  # of the consumer's checks and may carry different evidence. This branch
+  # previously fell through to the no-write path and reported the comment state
+  # as already current, which discarded a completed review and published the
+  # claim that nothing had changed. The review side deliberately exempts
+  # workflow_run from the already-reviewed short-circuit precisely so this
+  # re-review can happen; both sides now agree.
+  #
+  # Nothing here compares run identity, so this is last-writer-wins. The
+  # workflow supplies the ordering: the review job is cancel-in-progress so a
+  # superseded review never reaches its writer, and the writer job is
+  # non-cancelable and serialized per pull request so writers apply in
+  # completion order.
   patch_review_comment "$CANONICAL_ID" "$TEMP_DIR/comment.md"
   if (( CANONICAL_COUNT > 1 )); then
     record_write_action "reconciled_and_replaced_current"
