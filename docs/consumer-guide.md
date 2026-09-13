@@ -49,6 +49,10 @@ the fork is not reviewed. See the fork-authorization section of
 The caller owns all triggers. The reusable workflow accepts only
 `workflow_call`, resolves the consumer default-branch SHA from GitHub, and
 checks out the consumer and Loopkeeper repositories into separate directories.
+When a completed CI run is associated with multiple pull requests, the caller
+fans out one matrix job per still-open PR whose current head matches the run
+SHA. It re-fetches each PR before selection and refuses to guess if any target
+cannot be verified; it never chooses only the first association.
 The shipped caller templates intentionally omit schedules because a scheduled
 event has no single PR or issue target; add a scheduler only if it enumerates
 and dispatches explicit targets.

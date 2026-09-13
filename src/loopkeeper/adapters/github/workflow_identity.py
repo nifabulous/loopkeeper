@@ -213,8 +213,9 @@ def select_workflow_run_target(
       - source_event == "pull_request"
       - exact head equality (run_head_sha == current_pr_head_sha, both 40-hex)
       - pr_state == "OPEN"
-      - exactly one explicit workflow_run.pull_requests association for target_pr;
-        missing, duplicated, or ambiguous associations take fallback.
+      - exactly one explicit workflow_run.pull_requests association for
+        target_pr; other distinct associated PRs are valid fan-out siblings.
+        Missing or duplicated associations for target_pr take fallback.
 
     This is a pure function: no I/O, no env reads.
     """
@@ -246,25 +247,9 @@ def select_workflow_run_target(
     # It is a sequence of ints from workflow_run.pull_requests[*].number
     if not isinstance(run_pull_request_numbers, Sequence):
         return "fallback"
-    # Count occurrences of target_pr
-    # Also detect duplicates (same PR appearing twice) and ambiguous (multiple PRs)
-    # Exact requirement: exactly one explicit association for target_pr
-    # So list should contain exactly one element and that element is target_pr,
-    # OR list may contain multiple but exactly one equals target_pr? Brief says
-    # "exactly one explicit workflow_run.pull_requests association for target_pr;
-    # missing, duplicated, or ambiguous associations take fallback"
-    # So we interpret: the list of associated PR numbers must contain target_pr exactly once
-    # and must not contain duplicates of target_pr, and also the list length should be 1?
-    # The harness in original code checks: pull_requests array contains target_pr and length? Let's see
-    # Original shell: select(.event == "pull_request" and .head_sha == $head) | select([.pull_requests[]?.number? | tostring] | index($pr) != null)
-    # Then in python select_workflow_run_target, we need to be stricter: require exactly one association for target_pr
-    # For our implementation: if list is None or empty => fallback, if target_pr not in list => fallback,
-    # if list.count(target_pr) !=1 => fallback (duplicated), if len(list) !=1 => ambiguous? But original allows shared head across multiple PRs? The brief says exactly one explicit association for target_pr.
-    # So we should require that the list, when filtered to target_pr, has exactly one, and that the list's unique set for target_pr is 1.
-    # But if list contains other PR numbers besides target_pr, is that ambiguous? Example: run associated with PR 15 and 16 (shared head) => ambiguous, fallback.
-    # The shell code would defer only when THIS PR is in list, even if other PRs also there? But the pure filter is stricter: it says exactly one explicit association for target_pr.
-    # We'll implement: run_pull_request_numbers must be a sequence with exactly one element that equals target_pr.
-    # However to be more permissive for shared-head case, we check count of target_pr ==1 and len ==1.
+    # Count occurrences of target_pr. Multiple distinct associated PRs are
+    # expected when one CI run serves a shared head; the caller fans them out
+    # and invokes this predicate independently for each target.
     try:
         nums = list(run_pull_request_numbers)
     except Exception:
@@ -277,11 +262,5 @@ def select_workflow_run_target(
     # Must contain target_pr exactly once
     count = nums.count(target_pr)
     if count != 1:
-        return "fallback"
-    # Must not be ambiguous: exactly one association total (i.e., len(nums) ==1)
-    # If len>1, even if target_pr appears once, it's ambiguous because commit is shared across PRs
-    # The brief says "exactly one explicit workflow_run.pull_requests association for target_pr"
-    # Could be interpreted as count==1 regardless of other PRs, but "ambiguous associations take fallback" suggests len>1 is ambiguous.
-    if len(nums) != 1:
         return "fallback"
     return "reviewable"
