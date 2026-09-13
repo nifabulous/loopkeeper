@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # Update this constant only alongside the workflow, and only to a commit that
 # is already merged -- never to an unmerged head, which would let a change
 # review itself.
-CURRENT_RELEASE_SHA = "ff1dbeb4f3eee1a45dc34ad1e02c062b93d26231"
+CURRENT_RELEASE_SHA = "d480e53c35646e7ac736910041b6e30c200337e4"
 
 
 def test_posting_pr_workflow_defaults_to_comments():
