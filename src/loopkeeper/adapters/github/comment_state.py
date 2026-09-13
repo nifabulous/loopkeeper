@@ -403,6 +403,7 @@ def render_comment(
     max_bytes: int,
     ci_run_id: int | None = None,
     ci_run_attempt: int | None = None,
+    profile: str = "payments",
 ) -> str:
     """Render the final comment body: sanitized model + adapter-owned footer.
 
@@ -442,7 +443,7 @@ def render_comment(
     # valid trailer identity fields intact while sanitizing prose and evidence.
     from loopkeeper.review_output import sanitize_review_output
 
-    sanitized = sanitize_review_output(model_markdown)
+    sanitized = sanitize_review_output(model_markdown, profile=profile)
 
     # Bound the model response without losing a valid machine-readable trailer.
     # Invalid output remains invalid and is retained for fail-closed accounting.

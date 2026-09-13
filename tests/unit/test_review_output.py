@@ -91,3 +91,59 @@ def test_review_output_cli_rejects_input_over_configured_bound():
 
     assert result.returncode != 0
     assert "input exceeds 10 bytes" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Output must be sanitized under the same profile as the input (issue #38)
+# ---------------------------------------------------------------------------
+
+
+def test_a_commit_sha_survives_code_review_sanitization():
+    """The identifier binding a review to its commit must stay comparable.
+
+    Under the payments profile the nine-digit run inside this SHA matched the
+    account-number rule and was replaced, so the review's exact-head claim
+    named a commit that cannot be found in git log -- while the same SHA stayed
+    intact in the comment marker the harness writes two lines below it.
+    """
+    sha = "82f9a90c51a253a2f6ec48b5412ab360871504a7"
+    text = f"Exact-head checks for {sha} report success.\n"
+
+    assert sha in sanitize_review_output(text, profile="code-review")
+
+
+def test_the_payments_profile_still_redacts_an_account_number():
+    """Narrowing did not happen here: the profile split is doing the work."""
+    text = "Credit account 100200300400 for the beneficiary.\n"
+
+    assert "100200300400" not in sanitize_review_output(text)
+
+
+def test_short_and_long_digest_forms_survive_code_review_sanitization():
+    for digest in (
+        "d41d8cd98f00b204e9800998ecf8427e",
+        "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+        "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
+        "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
+    ):
+        assert digest in sanitize_review_output(
+            f"checksum {digest}\n", profile="code-review"
+        ), digest
+
+
+def test_a_trailer_evidence_field_keeps_its_sha_under_code_review():
+    """Trailer fields are sanitized too, and carry SHAs in verification text.
+
+    The finding is RESOLVED because that is the state whose evidence the schema
+    carries; a NEW finding's evidence is dropped on re-render, which would make
+    this pass without testing anything.
+    """
+    sha = "82f9a90c51a253a2f6ec48b5412ab360871504a7"
+    text = (
+        "Review prose.\n\n"
+        '<!-- loopkeeper-verdict: {"schema":2,"verdict":"COMMENT","findings":'
+        '[{"sev":"P2","state":"RESOLVED","file":"a.py","cat":"functional","id":"x",'
+        f'"evidence":{{"files":["a.py"],"verification":"checked at {sha}"}}}}]}} -->\n'
+    )
+
+    assert sha in sanitize_review_output(text, profile="code-review")

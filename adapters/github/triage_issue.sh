@@ -176,7 +176,9 @@ if [[ ! -s "$TEMP_DIR/triage.md" ]]; then
   exit 1
 fi
 
-if ! python3 -m loopkeeper.redaction <"$TEMP_DIR/triage.md" >"$TEMP_DIR/triage-sanitized.md" 2>/dev/null; then
+# Same profile as the issue metadata was sanitized with above.
+if ! python3 -m loopkeeper.redaction --profile code-review \
+  <"$TEMP_DIR/triage.md" >"$TEMP_DIR/triage-sanitized.md" 2>/dev/null; then
   echo "Could not sanitize model output; refusing publication." >&2
   exit 4
 fi

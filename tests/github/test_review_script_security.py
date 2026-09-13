@@ -116,10 +116,42 @@ def test_review_script_carries_redaction_metadata_into_the_prompt():
     assert "render_redaction_guidance" in source
 
 
-def test_review_script_uses_code_review_redaction_for_untrusted_evidence():
-    source = REVIEW.read_text(encoding="utf-8")
+def _unprofiled_sanitize_calls(source: str) -> list[str]:
+    """Invocations of a sanitizer that do not name the code-review profile.
 
-    assert source.count("--profile code-review") == 4
+    Each call is read together with its backslash continuations, because the
+    profile is usually on a following line.
+    """
+    lines = source.splitlines()
+    offenders = []
+    for index, line in enumerate(lines):
+        if "loopkeeper.redaction" not in line and "loopkeeper.review_output" not in line:
+            continue
+        invocation = [line]
+        cursor = index
+        while cursor < len(lines) - 1 and lines[cursor].rstrip().endswith("\\"):
+            cursor += 1
+            invocation.append(lines[cursor])
+        joined = "\n".join(invocation)
+        if "loopkeeper.review_output" in joined and "--sanitize" not in joined:
+            continue  # --validate and bounding do not redact
+        if "--profile code-review" not in joined:
+            offenders.append(joined)
+    return offenders
+
+
+def test_review_script_uses_code_review_redaction_for_untrusted_evidence():
+    """Every sanitizing pass names the profile, inputs and output alike.
+
+    A count assertion said the same thing until the output pass was added, and
+    it could only ever say how many calls were profiled -- never that none were
+    left unprofiled. The output pass defaulted to payments while every input
+    used code-review, and a commit SHA in review prose came back with a digit
+    run replaced by a placeholder (issue #38).
+    """
+    offenders = _unprofiled_sanitize_calls(REVIEW.read_text(encoding="utf-8"))
+
+    assert not offenders, "unprofiled sanitize call(s):\n" + "\n--\n".join(offenders)
 
 
 def test_workflow_run_ci_replaces_fallback_for_same_head():

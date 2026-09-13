@@ -13,7 +13,7 @@ import json
 import re
 import sys
 
-from .redaction import sanitize
+from .redaction import RedactionProfile, sanitize
 from .schema import parse_trailer, render_trailer
 from .truncate import truncate_utf8
 from .types import Evidence, Finding, Trailer
@@ -45,17 +45,17 @@ DEFAULT_MAX_INPUT_BYTES = 1_000_000
 _SHORT_SECRET_RE = re.compile(r"\b(?:sk|pk|rk|ak)[-_][A-Za-z0-9_-]{3,}\b")
 
 
-def _sanitize_free_text(text: str) -> str:
+def _sanitize_free_text(text: str, profile: RedactionProfile = "payments") -> str:
     """Sanitize prose/free-text fields without touching trailer identity fields."""
 
-    sanitized = sanitize(text)
+    sanitized = sanitize(text, profile=profile)
     # Defense-in-depth for short provider tokens that fall below the generic
     # corpus thresholds.  Applied only to prose and free-text trailer fields,
     # never to file/category/finding identifiers.
     return _SHORT_SECRET_RE.sub("[SECRET]", sanitized)
 
 
-def _sanitize_trailer(trailer: Trailer) -> Trailer:
+def _sanitize_trailer(trailer: Trailer, profile: RedactionProfile = "payments") -> Trailer:
     """Redact free-text trailer values while preserving machine identity."""
 
     findings: list[Finding] = []
@@ -64,12 +64,12 @@ def _sanitize_trailer(trailer: Trailer) -> Trailer:
         if finding.evidence is not None:
             evidence = Evidence(
                 files=finding.evidence.files,
-                verification=_sanitize_free_text(finding.evidence.verification),
+                verification=_sanitize_free_text(finding.evidence.verification, profile),
             )
         unverifiable = None
         if finding.unverifiable is not None:
             missing = finding.unverifiable.get("missing", "")
-            unverifiable = {"missing": _sanitize_free_text(str(missing))}
+            unverifiable = {"missing": _sanitize_free_text(str(missing), profile)}
         findings.append(
             Finding(
                 sev=finding.sev,
@@ -83,7 +83,7 @@ def _sanitize_trailer(trailer: Trailer) -> Trailer:
         )
     return Trailer(
         schema=trailer.schema,
-        verdict=_sanitize_free_text(trailer.verdict),
+        verdict=_sanitize_free_text(trailer.verdict, profile),
         findings=tuple(findings),
     )
 
@@ -95,7 +95,7 @@ def review_validation_payload(text: str) -> dict[str, object]:
     return validation.to_dict()
 
 
-def sanitize_review_output(text: str) -> str:
+def sanitize_review_output(text: str, profile: RedactionProfile = "payments") -> str:
     """Sanitize model output without corrupting a valid schema trailer.
 
     Trailer identity fields (finding IDs, categories, and file paths) are
@@ -109,10 +109,10 @@ def sanitize_review_output(text: str) -> str:
         raise TypeError("text must be str")
     split = split_valid_trailer(text)
     if split is None:
-        return _sanitize_free_text(text)
+        return _sanitize_free_text(text, profile)
     prose, trailer = split
-    sanitized_prose = _sanitize_free_text(prose).rstrip()
-    sanitized_trailer = render_trailer(_sanitize_trailer(trailer))
+    sanitized_prose = _sanitize_free_text(prose, profile).rstrip()
+    sanitized_trailer = render_trailer(_sanitize_trailer(trailer, profile))
     if sanitized_prose:
         return f"{sanitized_prose}\n\n{sanitized_trailer}\n"
     return f"{sanitized_trailer}\n"
@@ -190,6 +190,14 @@ if __name__ == "__main__":  # pragma: no cover - exercised by shell adapters
     parser.add_argument("--validate", action="store_true")
     parser.add_argument("--sanitize", action="store_true")
     parser.add_argument("--max-input-bytes", type=int, default=DEFAULT_MAX_INPUT_BYTES)
+    # Must match the profile the inputs were sanitized with. Output
+    # defaulting to payments while every input used code-review is how a
+    # commit SHA in review prose came back with a digit run replaced.
+    parser.add_argument(
+        "--profile",
+        choices=("payments", "code-review"),
+        default="payments",
+    )
     args = parser.parse_args()
     if args.max_input_bytes <= 0:
         parser.error("--max-input-bytes must be positive")
@@ -211,7 +219,7 @@ if __name__ == "__main__":  # pragma: no cover - exercised by shell adapters
     if args.validate:
         sys.stdout.write(json.dumps(review_validation_payload(text), sort_keys=True) + "\n")
     elif args.sanitize:
-        sys.stdout.write(sanitize_review_output(text))
+        sys.stdout.write(sanitize_review_output(text, profile=args.profile))
     else:
         if args.max_bytes is None:
             parser.error("--max-bytes is required unless --validate or --sanitize is used")

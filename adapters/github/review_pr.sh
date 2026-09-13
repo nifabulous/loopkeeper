@@ -983,8 +983,14 @@ if [[ ! -s "$TEMP_DIR/review.md" ]]; then
   exit 1
 fi
 
+# The profile must match the one every input pass used. Sanitizing model prose
+# under the payments profile replaced a digit run inside a commit SHA, so a
+# review's exact-head claim carried an identifier that could not be compared
+# against git log -- while the same SHA stayed intact in the marker two lines
+# below it.
 if ! python3 -m loopkeeper.review_output \
   --sanitize \
+  --profile code-review \
   --max-input-bytes "$LOOPKEEPER_MAX_OUTPUT_BYTES" \
   <"$TEMP_DIR/review.md" >"$TEMP_DIR/review-sanitized.md" 2>/dev/null; then
   echo "Could not sanitize model output; refusing publication." >&2
@@ -1069,7 +1075,13 @@ model_text = (temp_dir / "review.md").read_text(encoding="utf-8")
 run_id = int(run_id_raw) if run_id_raw and evidence_state == "ci" else None
 run_attempt = int(run_attempt_raw) if run_attempt_raw and evidence_state == "ci" else None
 rendered = render_comment(
-    model_text, marker, evidence_state, int(max_bytes_raw), run_id, run_attempt
+    model_text,
+    marker,
+    evidence_state,
+    int(max_bytes_raw),
+    run_id,
+    run_attempt,
+    profile="code-review",
 )
 (temp_dir / "comment.md").write_text(rendered, encoding="utf-8")
 PY
