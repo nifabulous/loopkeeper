@@ -5,7 +5,7 @@ import pytest
 from loopkeeper.errors import ConfigError, SecurityError
 from loopkeeper.policy import load_policy
 from loopkeeper.prompt import Prompt, UntrustedArtifacts, render_review_prompt
-from loopkeeper.redaction import RedactionResult
+from loopkeeper.redaction import SOURCE_PLACEHOLDER_LITERAL, RedactionResult
 
 
 def test_prompt_uses_policy_and_active_redactor_placeholders(policy, artifacts):
@@ -48,7 +48,14 @@ def test_prompt_omits_the_placeholder_note_when_nothing_was_redacted(policy, art
     assert "Active redaction placeholders" not in prompt.instructions
 
 
-def test_prompt_keeps_source_placeholder_literals_reviewable(policy):
+def test_prompt_explains_that_a_defanged_token_is_a_substitution(policy):
+    """The note must not invite reviewing the substituted token as source.
+
+    It used to end "remains reviewable evidence", which is true and reads as
+    an invitation. A reviewer met a list literal repeating PATCH_CEILING,
+    rewritten by the defang into text that no longer parses, took it for the
+    file's own content, and filed a P1 against correct Python.
+    """
     artifacts = UntrustedArtifacts(
         metadata="",
         diff='cfg = "[source-placeholder-literal]"\nsize = [ACCOUNT]\n',
@@ -63,8 +70,32 @@ def test_prompt_keeps_source_placeholder_literals_reviewable(policy):
     )
 
     assert "Every exact occurrence of a listed bracketed token" in prompt.instructions
-    assert "was present in source" in prompt.instructions
-    assert "remains reviewable evidence" in prompt.instructions
+    assert "the source itself contained" in prompt.instructions
+    assert "the token is a substitution" in prompt.instructions
+    assert "not a syntax error" in prompt.instructions
+    assert "Do not report a finding about the substitution" in prompt.instructions
+
+
+def test_the_defang_note_does_not_invite_review_of_the_substituted_token(policy):
+    """Pin the removed phrasing so it cannot come back.
+
+    The fixture must contain the defang literal itself: the note is emitted
+    only when an artifact carries it. A fixture showing the *pre*-defang shape
+    instead leaves the note unrendered, and the assertion then passes because
+    there is no note at all rather than because the phrasing is gone.
+    """
+    artifacts = UntrustedArtifacts(
+        metadata="",
+        diff=f"sizes = {SOURCE_PLACEHOLDER_LITERAL} * COUNT\n",
+        previous_review=None,
+        checks=None,
+    )
+
+    prompt = render_review_prompt(policy, RedactionResult("safe", ()), artifacts)
+
+    # The note must actually be present, or the absence below proves nothing.
+    assert "Do not report a finding about the substitution" in prompt.instructions
+    assert "remains reviewable evidence" not in prompt.instructions
 
 
 def test_prompt_does_not_contain_second_category_table(policy, artifacts):

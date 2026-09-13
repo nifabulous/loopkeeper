@@ -83,9 +83,13 @@ LOOPKEEPER_BOT_LOGIN="${LOOPKEEPER_BOT_LOGIN:-github-actions[bot]}"
 : "${LOOPKEEPER_PR_FILE_PAGE_SIZE:=5}"
 : "${LOOPKEEPER_PR_FILE_MAX_PAGES:=100}"
 # Per-file patch budget. LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES is an operator
-# override; when unset it is derived from the input budget and the actual
-# changed-file count once the PR metadata is known. A fixed 1000-byte cap
-# supplied roughly 7% of a 600000-byte budget on a 45-file pull request.
+# override for the per-file ceiling; when unset the ceiling is
+# LOOPKEEPER_PR_FILE_PATCH_CEILING. The share of the input budget that patches
+# may occupy is LOOPKEEPER_PR_FILE_BUDGET_PERCENT, and it is allocated by
+# actual patch size rather than divided by the changed-file count: dividing
+# made each file's allowance a function of how wide the pull request was, so a
+# 21-file change occupying a fifth of its budget still lost its two largest
+# files while four fifths of the allowance went unused.
 # CI run identity for the triggering workflow_run, when the caller supplies it.
 # Empty means unknown: a fallback review has no backing run, and a caller
 # pinned to a revision without these inputs sends nothing.
@@ -274,22 +278,16 @@ HEAD_REF_NAME="$(jq -r '.headRefName' <<<"$METADATA")"
   || { echo "LOOPKEEPER_CI_RUN_ATTEMPT must be a bounded positive integer" >&2; exit 2; }
 PR_CHANGED_FILES="$(jq -r '.changedFiles // 0' <<<"$METADATA")"
 [[ "$PR_CHANGED_FILES" =~ ^[0-9]+$ ]] || PR_CHANGED_FILES=0
+# Collection bounds each patch at the per-file ceiling so no single file can
+# dominate memory or the payload. The aggregate is imposed afterwards by
+# allocate_patch_budget, which is what keeps the assembled stream under the
+# capture_bounded_stream guard -- that guard exits 4 rather than degrading, so
+# the allocation must finish before it, not rely on it.
 if [[ -z "${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES:-}" ]]; then
-  patch_budget_share=$(( LOOPKEEPER_MAX_INPUT_BYTES * LOOPKEEPER_PR_FILE_BUDGET_PERCENT / 100 ))
-  if (( PR_CHANGED_FILES > 0 )); then
-    derived_patch_bytes=$(( patch_budget_share / PR_CHANGED_FILES ))
-  else
-    derived_patch_bytes="$LOOPKEEPER_PR_FILE_PATCH_CEILING"
-  fi
-  if (( derived_patch_bytes < LOOPKEEPER_PR_FILE_MIN_PATCH_BYTES )); then
-    derived_patch_bytes="$LOOPKEEPER_PR_FILE_MIN_PATCH_BYTES"
-  fi
-  if (( derived_patch_bytes > LOOPKEEPER_PR_FILE_PATCH_CEILING )); then
-    derived_patch_bytes="$LOOPKEEPER_PR_FILE_PATCH_CEILING"
-  fi
-  LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES="$derived_patch_bytes"
-  echo "Derived per-file patch budget ${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES} bytes for ${PR_CHANGED_FILES} changed file(s)." >&2
+  LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES="$LOOPKEEPER_PR_FILE_PATCH_CEILING"
 fi
+PATCH_BUDGET_BYTES=$(( LOOPKEEPER_MAX_INPUT_BYTES * LOOPKEEPER_PR_FILE_BUDGET_PERCENT / 100 ))
+echo "Patch evidence budget ${PATCH_BUDGET_BYTES} bytes across ${PR_CHANGED_FILES} changed file(s); per-file ceiling ${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES} bytes." >&2
 if [[ -z "$LOOPKEEPER_CONTRACT_PATH" ]]; then
   CONTRACT_SLUG="${HEAD_REF_NAME//\//-}"
   CONTRACT_HASH="$(python3 -c 'import hashlib, sys; sys.stdout.write(hashlib.sha256(sys.argv[1].encode()).hexdigest()[:12])' "$HEAD_REF_NAME")"
@@ -563,8 +561,94 @@ PY
   fi
 }
 
+# Allocate the patch budget by actual size, not by file count.
+#
+# Dividing the budget by the number of changed files made each file's allowance
+# a function of how wide the pull request was: a 3-file change got 100000 bytes
+# per file and a 30-file change got 10000, even when the 30-file change was
+# smaller in total. Files that fit were never the problem; the ones that lost
+# content were the largest, which are the ones most worth reading.
+#
+# Max-min fair allocation instead. Smallest first, each file takes the lesser
+# of what it needs and an equal share of what is left, and whatever a small
+# file does not use is redistributed. A pull request whose patches fit inside
+# the budget keeps every byte; only one that genuinely overflows is bounded,
+# and then the largest files absorb it.
+#
+# The total granted can never exceed the budget, so the assembled stream stays
+# under capture_bounded_stream by construction rather than by a clamp chosen to
+# look safe.
+allocate_patch_budget() {
+  local source_file="$1"
+  local budget="$2"
+  local destination="${source_file}.allocated"
+  python3 - "$source_file" "$destination" "$budget" <<'ALLOCATE'
+import json
+import sys
+
+source_file, destination_file, budget_raw = sys.argv[1:]
+budget = int(budget_raw)
+
+records = []
+with open(source_file, encoding="utf-8") as source:
+    for line in source:
+        line = line.strip()
+        if line:
+            records.append(json.loads(line))
+
+
+def patch_bytes(record):
+    patch = record.get("patch")
+    return len(patch.encode("utf-8")) if isinstance(patch, str) else 0
+
+
+# Max-min fair shares, smallest first so unused remainder is redistributed.
+order = sorted(range(len(records)), key=lambda i: patch_bytes(records[i]))
+grants = [0] * len(records)
+remaining = budget
+left = len(order)
+for index in order:
+    if left <= 0:
+        break
+    share = remaining // left
+    need = patch_bytes(records[index])
+    grant = need if need <= share else share
+    grants[index] = grant
+    remaining -= grant
+    left -= 1
+
+with open(destination_file, "w", encoding="utf-8") as destination:
+    for index, record in enumerate(records):
+        need = patch_bytes(record)
+        grant = grants[index]
+        if need > grant:
+            marker = f"\n[loopkeeper patch truncated at {grant} bytes]"
+            marker_bytes = marker.encode("utf-8")
+            if len(marker_bytes) > grant:
+                marker_bytes = b"[truncated]"[:grant]
+            prefix_budget = max(0, grant - len(marker_bytes))
+            encoded = record["patch"].encode("utf-8")
+            record["patch"] = (
+                encoded[:prefix_budget].decode("utf-8", "ignore")
+                + marker_bytes.decode("utf-8", "ignore")
+            )
+            record["patch_truncated"] = True
+        # A patch already bounded at the per-file ceiling during collection
+        # stays flagged even when the allocation grants it everything it has
+        # left: the content is still incomplete.
+        destination.write(
+            json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+        )
+ALLOCATE
+  mv "$destination" "$source_file"
+}
+
 if ! collect_bounded_pr_files "$TEMP_DIR/pr-files.jsonl"; then
   echo "Could not collect bounded pull-request file changes; refusing to pass raw diff to the model." >&2
+  exit 4
+fi
+if ! allocate_patch_budget "$TEMP_DIR/pr-files.jsonl" "$PATCH_BUDGET_BYTES"; then
+  echo "Could not allocate the patch evidence budget; refusing to pass an unbounded diff to the model." >&2
   exit 4
 fi
 PR_FILES_RETURNED="$(wc -l <"$TEMP_DIR/pr-files.jsonl" | tr -d ' ')"

@@ -60,10 +60,21 @@ def render_redaction_guidance(
             " on the substitution itself, and do not infer the removed value."
         )
     if source_placeholders_defanged:
+        # "Remains reviewable evidence" was true and read as an invitation to
+        # review the substituted token as though it were the source text. A
+        # reviewer met a list literal repeating PATCH_CEILING, rewritten by
+        # the defang into text that no longer parses, took it for the file's
+        # own content, and filed a P1 against correct Python. Say plainly that the
+        # token is a substitution and carry the same prohibition the redaction
+        # note carries.
         parts.append(
-            f"{SOURCE_PLACEHOLDER_LITERAL} marks placeholder-shaped bracketed"
-            " text that was present in source. It is source content, not a"
-            " redaction, and remains reviewable evidence."
+            f"{SOURCE_PLACEHOLDER_LITERAL} replaces bracketed uppercase text the"
+            " source itself contained, so untrusted content cannot forge a"
+            " redaction placeholder. The surrounding source is unmodified, but"
+            " the token is a substitution and the original bracketed name is not"
+            " shown. It is not a syntax error, a malformed identifier, or any"
+            " other defect. Do not report a finding about the substitution, and"
+            " do not infer the original name."
         )
     return " ".join(parts)
 
