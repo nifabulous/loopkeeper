@@ -33,8 +33,8 @@ corresponding evidence record.
   bracketed uppercase token the source contained, so untrusted content cannot
   forge a redaction placeholder -- the control is unchanged. The note ended
   "remains reviewable evidence", which is true and reads as an invitation: a
-  reviewer met `[PATCH_CEILING] * COUNT` rewritten to
-  `[source-placeholder-literal] * COUNT`, took it for the file's own content,
+  reviewer met a list literal repeating a bracketed constant, rewritten by the
+  defang into text that no longer parses, took it for the file's own content,
   and filed a P1 against correct Python. The note now says the token is a
   substitution and carries the same prohibition the redaction note carries.
 - The per-file patch budget is allocated by actual patch size instead of being

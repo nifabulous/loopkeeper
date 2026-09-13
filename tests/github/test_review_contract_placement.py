@@ -156,6 +156,19 @@ def _allocate(sizes: list[int], budget: int = BUDGET_SHARE) -> list[int]:
         return granted
 
 
+def _repeat(size: int, count: int) -> list[int]:
+    """A list of `count` patches of `size` bytes.
+
+    Named rather than written as a bracketed constant repeated by `*`, on
+    purpose. The harness rewrites any bracketed uppercase token in untrusted
+    input so a pull request cannot forge a redaction placeholder, and that
+    turns a list literal of a constant into text which no longer parses.
+    Reviewers of this file -- human or model -- then read a NameError that is
+    not there. This docstring avoids the shape for the same reason.
+    """
+    return [size] * count
+
+
 def test_a_pull_request_inside_its_budget_loses_nothing():
     """Issue #37, with the sizes it reported.
 
@@ -172,7 +185,7 @@ def test_a_pull_request_inside_its_budget_loses_nothing():
 
 def test_a_wide_pull_request_is_not_penalised_for_its_width():
     """Width alone must not truncate anything while the budget has room."""
-    sizes = [2_000] * 100
+    sizes = _repeat(2_000, 100)
     assert sum(sizes) < BUDGET_SHARE
 
     assert _allocate(sizes) == sizes
@@ -197,11 +210,11 @@ def test_the_allocation_never_exceeds_the_budget_share():
     file count.
     """
     for sizes in (
-        [PATCH_CEILING] * MAX_RETRIEVABLE_FILES,
+        _repeat(PATCH_CEILING, MAX_RETRIEVABLE_FILES),
         [MAX_INPUT_BYTES * 2],
-        [PATCH_CEILING] * 100,
-        [1] * MAX_RETRIEVABLE_FILES,
-        [MIN_PATCH_BYTES] * MAX_RETRIEVABLE_FILES,
+        _repeat(PATCH_CEILING, 100),
+        _repeat(1, MAX_RETRIEVABLE_FILES),
+        _repeat(MIN_PATCH_BYTES, MAX_RETRIEVABLE_FILES),
     ):
         granted = _allocate(sizes)
         assert sum(granted) <= BUDGET_SHARE, f"{len(sizes)} files overflowed the share"

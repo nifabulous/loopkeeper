@@ -62,9 +62,9 @@ def render_redaction_guidance(
     if source_placeholders_defanged:
         # "Remains reviewable evidence" was true and read as an invitation to
         # review the substituted token as though it were the source text. A
-        # reviewer met `[PATCH_CEILING] * COUNT` rewritten to
-        # `[source-placeholder-literal] * COUNT`, took it for the file's own
-        # content, and filed a P1 against correct Python. Say plainly that the
+        # reviewer met a list literal repeating PATCH_CEILING, rewritten by
+        # the defang into text that no longer parses, took it for the file's
+        # own content, and filed a P1 against correct Python. Say plainly that the
         # token is a substitution and carry the same prohibition the redaction
         # note carries.
         parts.append(
