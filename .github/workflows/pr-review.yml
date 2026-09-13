@@ -178,8 +178,20 @@ jobs:
     if: ${{ needs.eligibility.outputs.eligible == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The event is part of the key. A pull_request_target review carries only
+    # fallback evidence; the workflow_run review carries exact-head CI
+    # evidence and is the one that publishes. Keyed on repo and pull request
+    # alone the two shared a group, so on a small change -- where CI finishes
+    # before the read-only run has started its review -- the fallback run
+    # cancelled the CI-evidenced one, produced no artifact, and the pull
+    # request received no review at all while every check reported green.
+    #
+    # Within one event cancel-in-progress still holds, so a superseded review
+    # of the same kind is dropped. Both may now run for the same head, which
+    # costs one extra model call; this workflow publishes nothing, so the
+    # only cost is the extra run.
     concurrency:
-      group: loopkeeper-pr-review-readonly-${{ inputs.consumer_repo }}-${{ inputs.pr_number }}
+      group: loopkeeper-pr-review-readonly-${{ inputs.consumer_repo }}-${{ inputs.pr_number }}-${{ github.event_name }}
       cancel-in-progress: true
     steps:
       - name: Check out consumer at forge-verified default-branch SHA
