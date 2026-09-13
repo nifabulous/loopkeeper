@@ -38,6 +38,17 @@ on:
         type: string
         required: false
         default: ""
+      # CI run identity of the triggering workflow_run. Optional so a caller
+      # pinned to a revision without these inputs keeps working; absence means
+      # unknown, which publishes rather than withholds.
+      ci_run_id:
+        type: string
+        required: false
+        default: ""
+      ci_run_attempt:
+        type: string
+        required: false
+        default: ""
       policy_path:
         type: string
         required: false
@@ -254,6 +265,8 @@ jobs:
           LOOPKEEPER_EVENT_NAME: ${{ github.event_name }}
           LOOPKEEPER_PR_ACTION: ${{ github.event.action }}
           LOOPKEEPER_EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha || github.event.workflow_run.head_sha || '' }}
+          LOOPKEEPER_CI_RUN_ID: ${{ inputs.ci_run_id || github.event.workflow_run.id || '' }}
+          LOOPKEEPER_CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt || github.event.workflow_run.run_attempt || '' }}
           LOOPKEEPER_CI_WORKFLOW_NAME: ${{ inputs.ci_workflow_name }}
           LOOPKEEPER_CI_WORKFLOW_FILE: ${{ inputs.ci_workflow_file }}
           LOOPKEEPER_POLICY_PATH: ${{ inputs.policy_path }}
@@ -383,6 +396,8 @@ jobs:
           LOOPKEEPER_EVENT_NAME: ${{ github.event_name }}
           LOOPKEEPER_PR_ACTION: ${{ github.event.action }}
           LOOPKEEPER_EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha || github.event.workflow_run.head_sha || '' }}
+          LOOPKEEPER_CI_RUN_ID: ${{ inputs.ci_run_id || github.event.workflow_run.id || '' }}
+          LOOPKEEPER_CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt || github.event.workflow_run.run_attempt || '' }}
           LOOPKEEPER_CI_WORKFLOW_NAME: ${{ inputs.ci_workflow_name }}
           LOOPKEEPER_CI_WORKFLOW_FILE: ${{ inputs.ci_workflow_file }}
           LOOPKEEPER_OPERATOR: "1"

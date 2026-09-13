@@ -398,6 +398,8 @@ def test_every_decision_kind_has_a_recorded_write_action():
         "REPLACE_CURRENT": {"replaced_current", "reconciled_and_replaced_current"},
         "SUPPRESS_FALLBACK": {"suppressed_repeat_fallback"},
         "SUPPRESS_DUPLICATE": {"suppressed_weaker_evidence"},
+        "SUPPRESS_SAME_RUN": {"suppressed_same_run"},
+        "SUPPRESS_STALE_RUN": {"suppressed_stale_run"},
         "RECONCILE_DUPLICATES": {"reconciled_duplicates"},
     }
 
@@ -422,3 +424,123 @@ def test_the_writer_never_reports_an_unpublished_review_as_no_change():
 
     assert "no_change" not in code
     assert "already current" not in code
+
+
+# ---------------------------------------------------------------------------
+# CI run freshness
+#
+# Replacing the published comment on a same-head CI review only makes sense if
+# the incoming review is newer. The decision function receives the CI run
+# identity and compares it; the evidence marker carries it so the comparison
+# survives across runs.
+# ---------------------------------------------------------------------------
+
+
+def _ci(comment_id: int, run_id: int | None, attempt: int | None) -> list[CommentState]:
+    return [
+        CommentState(
+            comment_id=comment_id,
+            head_sha=_sha("a"),
+            evidence_state="ci",
+            author_login="github-actions[bot]",
+            body="published",
+            ci_run_id=run_id,
+            ci_run_attempt=attempt,
+        )
+    ]
+
+
+def test_a_rerun_of_the_same_ci_run_replaces_the_published_comment():
+    """The case that motivated replacing at all.
+
+    A GitHub re-run keeps the run id and increments the attempt. Comparing run
+    id alone would read this as a repeat of the run already published and
+    discard it -- reintroducing issue #39 through the freshness check meant to
+    protect it.
+    """
+    action = decide_comment_action(_ci(7, 100, 1), "ci", _sha("a"), 100, 2)
+
+    assert action == "REPLACE_CURRENT"
+    assert action.canonical_id == 7
+
+
+def test_a_distinct_newer_ci_run_replaces_the_published_comment():
+    assert decide_comment_action(_ci(7, 100, 1), "ci", _sha("a"), 300, 1) == "REPLACE_CURRENT"
+
+
+def test_a_replay_of_the_published_ci_run_is_withheld():
+    """Same run, same attempt: the published comment already reports this result."""
+    assert decide_comment_action(_ci(7, 100, 1), "ci", _sha("a"), 100, 1) == "SUPPRESS_SAME_RUN"
+
+
+def test_an_older_ci_run_finishing_late_cannot_overwrite_a_newer_one():
+    assert decide_comment_action(_ci(7, 200, 1), "ci", _sha("a"), 100, 1) == "SUPPRESS_STALE_RUN"
+    assert decide_comment_action(_ci(7, 100, 2), "ci", _sha("a"), 100, 1) == "SUPPRESS_STALE_RUN"
+
+
+def test_unknown_identity_publishes_rather_than_withholds():
+    """Legacy comments and callers without the inputs must not stall the loop.
+
+    The two errors are not symmetric. Publishing costs a rewrite; withholding
+    discards a finished review and leaves a contradicted comment standing,
+    which is the failure the replacement path exists to fix.
+    """
+    # Comment published before the identity field existed.
+    assert decide_comment_action(_ci(7, None, None), "ci", _sha("a"), 100, 1) == "REPLACE_CURRENT"
+    # Caller pinned to a revision that does not send identity.
+    assert decide_comment_action(_ci(7, 100, 1), "ci", _sha("a")) == "REPLACE_CURRENT"
+
+
+def test_evidence_marker_round_trips_identity_and_stays_backward_compatible():
+    from loopkeeper.adapters.github.comment_state import (
+        parse_evidence_identity,
+        parse_evidence_marker,
+    )
+
+    stamped = serialize_evidence_marker("ci", 100, 2)
+    legacy = "<!-- loopkeeper-evidence:ci -->"
+
+    assert stamped == "<!-- loopkeeper-evidence:ci:100:2 -->"
+    assert parse_evidence_marker(stamped) == "ci"
+    assert parse_evidence_identity(stamped) == (100, 2)
+    # A comment published before the field must still parse as CI evidence.
+    assert parse_evidence_marker(legacy) == "ci"
+    assert parse_evidence_identity(legacy) is None
+    # Fallback evidence has no backing run and never carries identity.
+    assert serialize_evidence_marker("fallback") == "<!-- loopkeeper-evidence:fallback -->"
+
+
+def test_the_writer_recognises_the_marker_form_it_publishes():
+    """The jq matchers in the shell must accept the identity suffix.
+
+    They matched the old marker exactly. Left alone, the writer would stop
+    recognising the very comments it had just published and create a second one
+    on the next round.
+    """
+    import json
+    import shutil
+    import subprocess
+
+    jq = shutil.which("jq")
+    if jq is None:  # pragma: no cover - jq is present in CI and the dev shell
+        pytest.skip("jq not installed")
+
+    script = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+    matchers = re.findall(r'test\("(<!-- loopkeeper-evidence:[^"]*)"\)', script)
+    matchers += re.findall(r'capture\("(<!-- loopkeeper-evidence:[^"]*)"\)', script)
+    assert matchers, "no evidence matcher found in the writer"
+
+    stamped = serialize_evidence_marker("ci", 100, 2)
+    legacy = serialize_evidence_marker("ci")
+
+    for matcher in matchers:
+        for body in (stamped, legacy):
+            probe = subprocess.run(
+                [jq, "-r", f'if test("{matcher}") then "yes" else "no" end'],
+                input=json.dumps(f"review text\n\n{body}\n"),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            )
+            assert probe.stdout.strip() == "yes", f"{matcher!r} does not match {body!r}"

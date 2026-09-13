@@ -259,6 +259,41 @@ def test_called_workflow_writer_concurrency_is_non_cancelable():
     assert re.search(r"concurrency:\s*\n\s+group:.*pr", raw)
 
 
+def test_reusable_workflows_supply_ci_run_identity():
+    """Identity must reach the adapter, or freshness silently degrades to publish.
+
+    Absence of identity is treated as unknown and publishes, which is the safe
+    default but also the old behaviour. If the env wiring is dropped the
+    freshness check stops running and nothing fails, so it is pinned here.
+    The inputs are optional overrides; the fallback reads the caller's own
+    workflow_run payload, so a caller pinned to a revision without them still
+    gets identity without any caller change.
+    """
+    for name in ("pr-review.yml", "pr-review-posting.yml"):
+        raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+
+        assert "ci_run_id:" in raw, name
+        assert "ci_run_attempt:" in raw, name
+        assert (
+            "LOOPKEEPER_CI_RUN_ID: ${{ inputs.ci_run_id || github.event.workflow_run.id || '' }}"
+            in raw
+        ), name
+        assert (
+            "LOOPKEEPER_CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt"
+            " || github.event.workflow_run.run_attempt || '' }}" in raw
+        ), name
+
+
+def test_identity_inputs_are_optional_so_pinned_callers_keep_working():
+    """A required input would fail every caller pinned before it existed (cf #19)."""
+    for name in ("pr-review.yml", "pr-review-posting.yml"):
+        raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+        for field in ("ci_run_id", "ci_run_attempt"):
+            block = re.search(rf"^      {field}:\n((?:        .*\n)+)", raw, re.MULTILINE)
+            assert block, f"{name}: {field} declaration not found"
+            assert "required: false" in block.group(1), f"{name}: {field} must stay optional"
+
+
 def test_same_head_ci_ordering_rests_on_these_two_concurrency_settings():
     """Pin the pair that orders same-head CI reviews.
 

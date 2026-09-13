@@ -34,8 +34,19 @@ corresponding evidence record.
   duplicate, exited success, and recorded `no_change`. A completed review whose
   findings contradicted the published comment was discarded while every job
   reported green. A second CI-evidenced review of the same head now replaces the
-  published comment in place. One comment per head is unchanged; a fallback
-  review still never overwrites published CI evidence.
+  published comment in place, provided it comes from a newer CI run. One comment
+  per head is unchanged; a fallback review still never overwrites published CI
+  evidence.
+- The evidence marker records the CI run identity a review was produced from,
+  as `<!-- loopkeeper-evidence:ci:<run id>:<attempt> -->`. Same-head CI
+  replacement compares it, so a replay of the published run and an older run
+  finishing late are both withheld. A GitHub re-run keeps the run id and
+  increments the attempt, so both are compared; ordering by run id alone would
+  read a re-run as a repeat and discard it. Comments published before the field
+  existed still parse, and unknown identity publishes rather than withholds.
+  The identity is read from the caller's own `workflow_run` payload, so no
+  caller change is required; `ci_run_id` and `ci_run_attempt` are optional
+  inputs for callers that want to pass it explicitly.
 - Every outcome of the writer now names the rule that produced it.
   `no_change` and "comment state is already current" asserted that nothing had
   changed, which was false whenever a newer review had been withheld. The
