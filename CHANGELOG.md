@@ -28,6 +28,15 @@ corresponding evidence record.
 
 ### Fixed
 
+- The prompt no longer describes a defanged source placeholder in a way that
+  invites reviewing it as source. `[source-placeholder-literal]` replaces any
+  bracketed uppercase token the source contained, so untrusted content cannot
+  forge a redaction placeholder -- the control is unchanged. The note ended
+  "remains reviewable evidence", which is true and reads as an invitation: a
+  reviewer met `[PATCH_CEILING] * COUNT` rewritten to
+  `[source-placeholder-literal] * COUNT`, took it for the file's own content,
+  and filed a P1 against correct Python. The note now says the token is a
+  substitution and carries the same prohibition the redaction note carries.
 - The per-file patch budget is allocated by actual patch size instead of being
   divided by the changed-file count. Dividing made each file's allowance a
   function of how wide the pull request was: a 21-file change whose entire diff
