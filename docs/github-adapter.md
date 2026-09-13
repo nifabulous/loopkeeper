@@ -30,8 +30,15 @@ and passes PR content only through the untrusted channel.
   evidence; write calls are handled only by the idempotent writer state machine.
 - Every `gh` query is bounded (`per_page=100&page={page}` capped at `max_pages`);
   no unbounded `--paginate` is used. Pull-request file pages use a smaller
-  configurable page size and each patch is byte-capped before the aggregate
-  input bound is applied, preserving file coverage for large asset/data PRs.
+  configurable page size and each patch is byte-capped at a per-file ceiling,
+  then the patch budget is allocated across the collected files by actual size
+  before the aggregate input bound is applied. A pull request whose patches fit
+  inside `LOOPKEEPER_PR_FILE_BUDGET_PERCENT` of the input budget is delivered
+  whole; only one that overflows is bounded, and then the largest patches
+  absorb it while small ones stay intact. The allocation is not divided by the
+  changed-file count: doing so made each file's allowance a function of how
+  wide the pull request was, so a change occupying a fifth of its budget still
+  lost its largest files.
   Each review artifact includes `review-metadata.json` with the evidence state
   and a complete/partial coverage classification, including file counts and
   per-file patch truncation. When the configured file-page cap is reached, the

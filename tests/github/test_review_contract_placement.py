@@ -91,6 +91,16 @@ def test_contract_text_names_the_prohibited_plain_text_form():
 
 # ---------------------------------------------------------------------------
 # Diff-evidence budget
+#
+# The budget used to be divided by the changed-file count, which made each
+# file's allowance a function of how wide the pull request was rather than of
+# what any file needed. A 21-file change occupying a fifth of its budget still
+# lost its two largest files while four fifths went unused (issue #37).
+#
+# These tests run the allocator that ships, extracted from review_pr.sh, rather
+# than a mirror of it in Python. A mirror is a second copy of the rule, and a
+# second copy is what let the writer state machine drift from its own
+# decision function.
 # ---------------------------------------------------------------------------
 
 MAX_INPUT_BYTES = 600_000          # workflow default
@@ -98,51 +108,136 @@ BUDGET_PERCENT = 50                # LOOPKEEPER_PR_FILE_BUDGET_PERCENT
 MIN_PATCH_BYTES = 512              # LOOPKEEPER_PR_FILE_MIN_PATCH_BYTES
 PATCH_CEILING = 32_768             # LOOPKEEPER_PR_FILE_PATCH_CEILING
 MAX_RETRIEVABLE_FILES = 5 * 100    # PAGE_SIZE * MAX_PAGES
+BUDGET_SHARE = MAX_INPUT_BYTES * BUDGET_PERCENT // 100
 
 
-def _derived_cap(changed_files: int, max_input_bytes: int = MAX_INPUT_BYTES) -> int:
-    """Mirror of the shell derivation in review_pr.sh."""
-    share = max_input_bytes * BUDGET_PERCENT // 100
-    cap = share // changed_files if changed_files > 0 else PATCH_CEILING
-    return max(MIN_PATCH_BYTES, min(PATCH_CEILING, cap))
+def _allocator_source() -> str:
+    """The allocator body as it ships, lifted out of the shell heredoc."""
+    source = REVIEW.read_text(encoding="utf-8")
+    assert "<<'ALLOCATE'" in source, "allocator heredoc not found in review_pr.sh"
+    return source.split("<<'ALLOCATE'\n", 1)[1].split("\nALLOCATE\n", 1)[0]
 
 
-def test_derived_budget_is_far_larger_than_the_old_fixed_cap():
-    """The observed 45-file PR should get real evidence, not 1000 bytes."""
-    assert _derived_cap(45) > 1000 * 5
+def _allocate(sizes: list[int], budget: int = BUDGET_SHARE) -> list[int]:
+    """Run the shipped allocator over synthetic patches; return granted bytes."""
+    import json
+    import subprocess
+    import sys
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as workdir:
+        work = Path(workdir)
+        script = work / "allocate.py"
+        script.write_text(_allocator_source(), encoding="utf-8")
+        source_file = work / "in.jsonl"
+        destination = work / "out.jsonl"
+        with source_file.open("w", encoding="utf-8") as handle:
+            for index, size in enumerate(sizes):
+                handle.write(
+                    json.dumps(
+                        {
+                            "filename": f"file{index}",
+                            "patch": "x" * size,
+                            "patch_truncated": False,
+                        }
+                    )
+                    + "\n"
+                )
+        subprocess.run(
+            [sys.executable, str(script), str(source_file), str(destination), str(budget)],
+            check=True,
+            capture_output=True,
+            timeout=120,
+        )
+        granted = []
+        for line in destination.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                granted.append(len(json.loads(line)["patch"].encode("utf-8")))
+        return granted
 
 
-def test_aggregate_patch_bytes_can_never_reach_the_input_budget():
-    """Exhaustive proof over every retrievable file count.
+def test_a_pull_request_inside_its_budget_loses_nothing():
+    """Issue #37, with the sizes it reported.
 
-    The aggregate guard exits 4 on overflow rather than degrading, so a
-    derived cap that could approach the input budget would convert large
-    pull requests from truncated into failed. Assert headroom instead of
-    choosing a comfortable-looking constant.
+    The whole diff was 122,450 bytes against a 300,000-byte share -- nothing
+    was near a limit -- and the two files most worth reading were truncated.
     """
-    worst = max(
-        count * _derived_cap(count)
-        for count in range(1, MAX_RETRIEVABLE_FILES + 1)
-    )
-    assert worst < MAX_INPUT_BYTES, f"worst-case aggregate {worst} reaches the budget"
-    # Leave room for the JSON envelope (filenames, statuses, counts).
-    assert worst <= MAX_INPUT_BYTES // 2
+    sizes = [26_806, 18_394, 11_365] + [3_600] * 18
+    assert sum(sizes) < BUDGET_SHARE
+
+    granted = _allocate(sizes)
+
+    assert granted == sizes, "a diff that fits must be delivered whole"
 
 
-def test_budget_scales_with_a_smaller_input_budget():
-    """A consumer lowering the input budget lowers the per-file cap too."""
-    assert _derived_cap(50, max_input_bytes=120_000) < _derived_cap(50)
+def test_a_wide_pull_request_is_not_penalised_for_its_width():
+    """Width alone must not truncate anything while the budget has room."""
+    sizes = [2_000] * 100
+    assert sum(sizes) < BUDGET_SHARE
+
+    assert _allocate(sizes) == sizes
 
 
-def test_review_script_derives_the_budget_and_keeps_the_override():
-    """The shell must derive when unset and honour an explicit override."""
+def test_overflow_bounds_the_largest_files_and_keeps_the_small_ones_whole():
+    sizes = [200_000, 150_000, 5_000, 1_000]
+    assert sum(sizes) > BUDGET_SHARE
+
+    granted = _allocate(sizes)
+
+    assert granted[2] == 5_000 and granted[3] == 1_000, "small patches must survive intact"
+    assert granted[0] < sizes[0] and granted[1] < sizes[1]
+    assert granted[0] == granted[1], "the overflow is shared evenly between the large files"
+
+
+def test_the_allocation_never_exceeds_the_budget_share():
+    """The guard downstream exits 4 rather than degrading, so this is load-bearing.
+
+    Asserted over shapes that previously produced the worst aggregates: many
+    files at the ceiling, a single enormous file, and the maximum retrievable
+    file count.
+    """
+    for sizes in (
+        [PATCH_CEILING] * MAX_RETRIEVABLE_FILES,
+        [MAX_INPUT_BYTES * 2],
+        [PATCH_CEILING] * 100,
+        [1] * MAX_RETRIEVABLE_FILES,
+        [MIN_PATCH_BYTES] * MAX_RETRIEVABLE_FILES,
+    ):
+        granted = _allocate(sizes)
+        assert sum(granted) <= BUDGET_SHARE, f"{len(sizes)} files overflowed the share"
+        assert all(g >= 0 for g in granted)
+
+
+def test_no_file_is_granted_more_than_it_needs():
+    granted = _allocate([10, 20, 30])
+    assert granted == [10, 20, 30]
+
+
+def test_review_script_allocates_by_size_and_keeps_the_override():
+    """The shell must allocate by size and still honour an operator ceiling."""
     source = REVIEW.read_text(encoding="utf-8")
 
     assert "LOOPKEEPER_PR_FILE_BUDGET_PERCENT" in source
     assert 'if [[ -z "${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES:-}" ]]; then' in source
-    assert "changedFiles" in source
-    # The fixed default must be gone.
+    assert "allocate_patch_budget" in source
+    # The fixed default must stay gone.
     assert ': "${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES:=1000}"' not in source
+    # And the count division that caused issue #37 must not come back.
+    assert "/ PR_CHANGED_FILES" not in source
+    assert "patch_budget_share / " not in source
+
+
+def test_the_allocation_runs_before_the_aggregate_guard():
+    """Ordering is the whole reason the allocation is safe.
+
+    capture_bounded_stream exits 4 rather than degrading. If the allocation ran
+    after it, an overflowing pull request would fail instead of being bounded.
+    """
+    source = REVIEW.read_text(encoding="utf-8")
+
+    allocate_at = source.index('allocate_patch_budget "$TEMP_DIR/pr-files.jsonl"')
+    guard_at = source.index('capture_bounded_stream "$LOOPKEEPER_MAX_INPUT_BYTES" "pull-request file changes"')
+    assert allocate_at < guard_at
 
 
 def test_truncation_disclosure_is_retained():

@@ -28,6 +28,16 @@ corresponding evidence record.
 
 ### Fixed
 
+- The per-file patch budget is allocated by actual patch size instead of being
+  divided by the changed-file count. Dividing made each file's allowance a
+  function of how wide the pull request was: a 21-file change whose entire diff
+  was 122,450 bytes against a 300,000-byte share still had its two largest
+  files truncated while four fifths of the allowance went unused, and those are
+  the files most worth reading. Allocation is now max-min fair -- a diff that
+  fits is delivered whole, and one that overflows is bounded with the largest
+  patches absorbing it while small ones stay intact. The total granted cannot
+  exceed the budget share by construction, so the aggregate guard, which exits
+  4 rather than degrading, stays unreachable.
 - A review triggered by a re-run of the consumer's CI is now published. The
   review side exempts `workflow_run` from the already-reviewed short-circuit so
   a re-run re-reviews the same head; the writer then suppressed the result as a

@@ -38,8 +38,9 @@ print(v.valid, v.error_code, v.diagnostic)
 "
 ```
 
-Also record the evidence budget actually used. The adapter logs the derived
-per-file patch budget and the changed-file count to stderr; a review whose
+Also record the evidence budget actually used. The adapter logs the patch
+evidence budget, the changed-file count, and the per-file ceiling to stderr; a
+review whose
 `review-metadata.json` reports `coverage.state == "partial"` has not seen the
 whole diff, and its findings must be weighted accordingly.
 
