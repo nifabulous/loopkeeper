@@ -7,11 +7,14 @@ operator gating, and duplicate reconciliation.
 from __future__ import annotations
 
 import os
+import re
+from pathlib import Path
 
 import pytest
 
 # Support both import paths
 from loopkeeper.adapters.github.comment_state import (
+    CommentActionKind,
     CommentState,
     decide_comment_action,
     render_comment,
@@ -20,6 +23,9 @@ from loopkeeper.adapters.github.comment_state import (
     serialize_superseded_marker,
     upsert_review_comment,
 )
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _sha(c: str) -> str:
@@ -70,10 +76,12 @@ def test_decide_comment_action_state_machine():
     # Same-head fallback + CI -> REPLACE_FALLBACK
     assert decide_comment_action(existing, "ci", sha) == "REPLACE_FALLBACK"
 
-    # Same-head CI + any duplicate -> SUPPRESS_DUPLICATE
+    # Same-head CI + new fallback -> SUPPRESS_DUPLICATE (weaker never overwrites stronger)
     existing_ci = [CommentState(comment_id=2, head_sha=sha, evidence_state="ci", author_login="github-actions[bot]", body="x")]
     assert decide_comment_action(existing_ci, "fallback", sha) == "SUPPRESS_DUPLICATE"
-    assert decide_comment_action(existing_ci, "ci", sha) == "SUPPRESS_DUPLICATE"
+
+    # Same-head CI + new CI -> REPLACE_CURRENT (a re-run of the checks)
+    assert decide_comment_action(existing_ci, "ci", sha) == "REPLACE_CURRENT"
 
     # Duplicate current-head comments already exist -> RECONCILE_DUPLICATES
     dupes = [
@@ -324,3 +332,321 @@ def test_no_summary_is_rendered_for_a_malformed_trailer():
 
     assert "| Status |" not in rendered
     assert "**Verdict:**" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Re-run publication (issue #39)
+#
+# A review triggered by a re-run of the consumer's CI completed, produced an
+# artifact, reported writer success, and was never published. The review side
+# exempts workflow_run from the already-reviewed short-circuit so the re-review
+# can happen; the write side then suppressed it as a duplicate and reported the
+# comment state as already current. Two same-head rules that disagreed.
+# ---------------------------------------------------------------------------
+
+
+def test_a_rerun_at_an_already_reviewed_head_publishes_the_newer_review():
+    """The second CI review of a head is backed by a different run, not a repeat."""
+    sha = _sha("a")
+    published = [
+        CommentState(
+            comment_id=99,
+            head_sha=sha,
+            evidence_state="ci",
+            author_login="github-actions[bot]",
+            body="first pass",
+        )
+    ]
+
+    action = decide_comment_action(published, "ci", sha)
+
+    assert action == "REPLACE_CURRENT"
+    assert action.canonical_id == 99, "must update in place, not create a second comment"
+
+
+def test_a_fallback_review_never_overwrites_published_ci_evidence():
+    sha = _sha("a")
+    published = [
+        CommentState(
+            comment_id=99,
+            head_sha=sha,
+            evidence_state="ci",
+            author_login="github-actions[bot]",
+            body="ci pass",
+        )
+    ]
+
+    assert decide_comment_action(published, "fallback", sha) == "SUPPRESS_DUPLICATE"
+
+
+def test_every_decision_kind_has_a_recorded_write_action():
+    """The shell writer re-implements this table; drift is what caused #39.
+
+    `adapters/github/review_pr.sh` does not call `decide_comment_action` -- it
+    branches on the same inputs inline. Nothing tied the two together, so a rule
+    could change in one and not the other. This asserts every decision kind has
+    at least one write action the shell records for it.
+    """
+    from typing import get_args
+
+    script = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+    # Actions reach record_write_action either as a literal or via the
+    # withheld_action variable, which the duplicate path prefixes.
+    recorded = set(re.findall(r'record_write_action "([a-z_]+)"', script))
+    recorded |= set(re.findall(r'withheld_action="([a-z_]+)"', script))
+
+    expected_for_kind = {
+        "CREATE": {"created"},
+        "REPLACE_FALLBACK": {"replaced_fallback", "reconciled_and_replaced_fallback"},
+        "REPLACE_CURRENT": {"replaced_current", "reconciled_and_replaced_current"},
+        "SUPPRESS_FALLBACK": {"suppressed_repeat_fallback"},
+        "SUPPRESS_DUPLICATE": {"suppressed_weaker_evidence"},
+        "SUPPRESS_SAME_RUN": {"suppressed_same_run"},
+        "SUPPRESS_STALE_RUN": {"suppressed_stale_run"},
+        # Reconciliation is recorded as a prefix on whichever action applied,
+        # so the reason a review was withheld is not lost to it.
+        "RECONCILE_DUPLICATES": {"reconciled_and_"},
+    }
+
+    kinds = set(get_args(CommentActionKind))
+    assert kinds == set(expected_for_kind), (
+        "a decision kind was added or removed without mapping it to a write action"
+    )
+    for kind, actions in expected_for_kind.items():
+        if kind == "RECONCILE_DUPLICATES":
+            assert 'record_write_action "reconciled_and_${withheld_action}"' in script
+            continue
+        assert actions & recorded, f"{kind} has no write action recorded by the shell writer"
+
+
+def test_the_writer_never_reports_an_unpublished_review_as_no_change():
+    """A completed review that is not published must name the rule that withheld it.
+
+    Reads executable lines only. A comment recording why a branch exists is
+    legitimate prose; asserting against it would forbid explaining the history.
+    """
+    script = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in script.splitlines() if not line.lstrip().startswith("#")
+    )
+
+    assert "no_change" not in code
+    assert "already current" not in code
+
+
+# ---------------------------------------------------------------------------
+# CI run freshness
+#
+# Replacing the published comment on a same-head CI review only makes sense if
+# the incoming review is newer. The decision function receives the CI run
+# identity and compares it; the evidence marker carries it so the comparison
+# survives across runs.
+# ---------------------------------------------------------------------------
+
+
+def _ci(comment_id: int, run_id: int | None, attempt: int | None) -> list[CommentState]:
+    return [
+        CommentState(
+            comment_id=comment_id,
+            head_sha=_sha("a"),
+            evidence_state="ci",
+            author_login="github-actions[bot]",
+            body="published",
+            ci_run_id=run_id,
+            ci_run_attempt=attempt,
+        )
+    ]
+
+
+def test_a_rerun_of_the_same_ci_run_replaces_the_published_comment():
+    """The case that motivated replacing at all.
+
+    A GitHub re-run keeps the run id and increments the attempt. Comparing run
+    id alone would read this as a repeat of the run already published and
+    discard it -- reintroducing issue #39 through the freshness check meant to
+    protect it.
+    """
+    action = decide_comment_action(_ci(7, 100, 1), "ci", _sha("a"), 100, 2)
+
+    assert action == "REPLACE_CURRENT"
+    assert action.canonical_id == 7
+
+
+def test_a_distinct_newer_ci_run_replaces_the_published_comment():
+    assert decide_comment_action(_ci(7, 100, 1), "ci", _sha("a"), 300, 1) == "REPLACE_CURRENT"
+
+
+def test_a_replay_of_the_published_ci_run_is_withheld():
+    """Same run, same attempt: the published comment already reports this result."""
+    assert decide_comment_action(_ci(7, 100, 1), "ci", _sha("a"), 100, 1) == "SUPPRESS_SAME_RUN"
+
+
+def test_an_older_ci_run_finishing_late_cannot_overwrite_a_newer_one():
+    assert decide_comment_action(_ci(7, 200, 1), "ci", _sha("a"), 100, 1) == "SUPPRESS_STALE_RUN"
+    assert decide_comment_action(_ci(7, 100, 2), "ci", _sha("a"), 100, 1) == "SUPPRESS_STALE_RUN"
+
+
+def test_unknown_identity_publishes_rather_than_withholds():
+    """Legacy comments and callers without the inputs must not stall the loop.
+
+    The two errors are not symmetric. Publishing costs a rewrite; withholding
+    discards a finished review and leaves a contradicted comment standing,
+    which is the failure the replacement path exists to fix.
+    """
+    # Comment published before the identity field existed.
+    assert decide_comment_action(_ci(7, None, None), "ci", _sha("a"), 100, 1) == "REPLACE_CURRENT"
+    # Caller pinned to a revision that does not send identity.
+    assert decide_comment_action(_ci(7, 100, 1), "ci", _sha("a")) == "REPLACE_CURRENT"
+
+
+def test_evidence_marker_round_trips_identity_and_stays_backward_compatible():
+    from loopkeeper.adapters.github.comment_state import (
+        parse_evidence_identity,
+        parse_evidence_marker,
+    )
+
+    stamped = serialize_evidence_marker("ci", 100, 2)
+    legacy = "<!-- loopkeeper-evidence:ci -->"
+
+    assert stamped == "<!-- loopkeeper-evidence:ci:100:2 -->"
+    assert parse_evidence_marker(stamped) == "ci"
+    assert parse_evidence_identity(stamped) == (100, 2)
+    # A comment published before the field must still parse as CI evidence.
+    assert parse_evidence_marker(legacy) == "ci"
+    assert parse_evidence_identity(legacy) is None
+    # Fallback evidence has no backing run and never carries identity.
+    assert serialize_evidence_marker("fallback") == "<!-- loopkeeper-evidence:fallback -->"
+
+
+def test_the_writer_recognises_the_marker_form_it_publishes():
+    """The jq matchers in the shell must accept the identity suffix.
+
+    They matched the old marker exactly. Left alone, the writer would stop
+    recognising the very comments it had just published and create a second one
+    on the next round.
+    """
+    import json
+    import shutil
+    import subprocess
+
+    jq = shutil.which("jq")
+    if jq is None:  # pragma: no cover - jq is present in CI and the dev shell
+        pytest.skip("jq not installed")
+
+    script = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+    matchers = re.findall(r'test\("(<!-- loopkeeper-evidence:[^"]*)"\)', script)
+    matchers += re.findall(r'capture\("(<!-- loopkeeper-evidence:[^"]*)"\)', script)
+    assert matchers, "no evidence matcher found in the writer"
+
+    stamped = serialize_evidence_marker("ci", 100, 2)
+    legacy = serialize_evidence_marker("ci")
+
+    for matcher in matchers:
+        for body in (stamped, legacy):
+            probe = subprocess.run(
+                [jq, "-r", f'if test("{matcher}") then "yes" else "no" end'],
+                input=json.dumps(f"review text\n\n{body}\n"),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            )
+            assert probe.stdout.strip() == "yes", f"{matcher!r} does not match {body!r}"
+
+
+# ---------------------------------------------------------------------------
+# Identity must survive the round trip through a published comment
+#
+# Constructing CommentState by hand proves the comparison arithmetic and
+# nothing else. The parser is what production reads, and it dropped the fields
+# at first: every parsed comment looked like it predated them, so the freshness
+# check never ran while its unit tests passed.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingWriter:
+    """Minimal CommentWriter that serves fixed comments and records writes."""
+
+    def __init__(self, comments: list[dict]) -> None:
+        self.comments = comments
+        self.created: list[str] = []
+        self.patched: list[tuple[int, str]] = []
+
+    def read_head(self, repo: str, pr: int) -> str:
+        return _sha("a")
+
+    def read_comments(
+        self, repo: str, pr: int, per_page: int = 100, max_pages: int = 10
+    ) -> list[dict]:
+        return self.comments
+
+    def create(self, repo: str, pr: int, body: str) -> dict:
+        self.created.append(body)
+        return {"id": 1}
+
+    def update(self, repo: str, comment_id: int, body: str) -> dict:
+        self.patched.append((comment_id, body))
+        return {"id": comment_id}
+
+
+def _published(run_id: int, attempt: int, comment_id: int = 41) -> list[dict]:
+    sha = _sha("a")
+    body = render_comment("earlier review", serialize_pr_marker(15, sha), "ci", 60000, run_id, attempt)
+    return [
+        {
+            "id": comment_id,
+            "user": {"login": "github-actions[bot]"},
+            "body": body,
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+    ]
+
+
+def test_identity_survives_render_and_parse_so_a_replay_is_withheld():
+    writer = _RecordingWriter(_published(run_id=100, attempt=1))
+
+    upsert_review_comment("o/r", 15, _sha("a"), "ci", "same run again", writer, 100, 1)
+
+    assert writer.created == []
+    assert writer.patched == [], "a replay of the published run must not rewrite the comment"
+
+
+def test_identity_survives_render_and_parse_so_a_stale_run_is_withheld():
+    writer = _RecordingWriter(_published(run_id=200, attempt=1))
+
+    upsert_review_comment("o/r", 15, _sha("a"), "ci", "older run, late", writer, 100, 1)
+
+    assert writer.created == []
+    assert writer.patched == []
+
+
+def test_identity_survives_render_and_parse_so_a_rerun_is_published(monkeypatch):
+    """The #39 case, end to end: same run id, later attempt."""
+    monkeypatch.setenv("LOOPKEEPER_OPERATOR", "1")  # writes are operator-gated
+    writer = _RecordingWriter(_published(run_id=100, attempt=1))
+
+    upsert_review_comment("o/r", 15, _sha("a"), "ci", "re-run result", writer, 100, 2)
+
+    assert writer.created == []
+    assert [cid for cid, _ in writer.patched] == [41]
+    assert "re-run result" in writer.patched[0][1]
+    assert "loopkeeper-evidence:ci:100:2" in writer.patched[0][1]
+
+
+def test_duplicate_current_head_comments_still_receive_a_newer_review(monkeypatch):
+    """Reconciliation must not swallow the replacement.
+
+    The writer supersedes extras and patches the canonical comment; the two are
+    separate steps, not alternatives.
+    """
+    monkeypatch.setenv("LOOPKEEPER_OPERATOR", "1")  # writes are operator-gated
+    comments = _published(run_id=100, attempt=1, comment_id=41)
+    comments += _published(run_id=100, attempt=1, comment_id=42)
+    comments[1]["created_at"] = "2026-01-01T00:05:00Z"
+    writer = _RecordingWriter(comments)
+
+    upsert_review_comment("o/r", 15, _sha("a"), "ci", "newer run", writer, 300, 1)
+
+    patched = {cid: body for cid, body in writer.patched}
+    assert 42 in patched and "loopkeeper-superseded" in patched[42]
+    assert 41 in patched and "newer run" in patched[41]

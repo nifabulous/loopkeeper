@@ -259,6 +259,74 @@ def test_called_workflow_writer_concurrency_is_non_cancelable():
     assert re.search(r"concurrency:\s*\n\s+group:.*pr", raw)
 
 
+def test_reusable_workflows_supply_ci_run_identity():
+    """Identity must reach the adapter, or freshness silently degrades to publish.
+
+    Absence of identity is treated as unknown and publishes, which is the safe
+    default but also the old behaviour. If the env wiring is dropped the
+    freshness check stops running and nothing fails, so it is pinned here.
+    The inputs are optional overrides; the fallback reads the caller's own
+    workflow_run payload, so a caller pinned to a revision without them still
+    gets identity without any caller change.
+    """
+    for name in ("pr-review.yml", "pr-review-posting.yml"):
+        raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+
+        assert "ci_run_id:" in raw, name
+        assert "ci_run_attempt:" in raw, name
+        assert (
+            "LOOPKEEPER_CI_RUN_ID: ${{ inputs.ci_run_id || github.event.workflow_run.id || '' }}"
+            in raw
+        ), name
+        assert (
+            "LOOPKEEPER_CI_RUN_ATTEMPT: ${{ inputs.ci_run_attempt"
+            " || github.event.workflow_run.run_attempt || '' }}" in raw
+        ), name
+
+
+def test_identity_inputs_are_optional_so_pinned_callers_keep_working():
+    """A required input would fail every caller pinned before it existed (cf #19)."""
+    for name in ("pr-review.yml", "pr-review-posting.yml"):
+        raw = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+        for field in ("ci_run_id", "ci_run_attempt"):
+            block = re.search(rf"^      {field}:\n((?:        .*\n)+)", raw, re.MULTILINE)
+            assert block, f"{name}: {field} declaration not found"
+            assert "required: false" in block.group(1), f"{name}: {field} must stay optional"
+
+
+def test_same_head_ci_ordering_rests_on_these_two_concurrency_settings():
+    """Pin the pair that orders same-head CI reviews.
+
+    A second CI review of a head replaces the published comment in place, and
+    `decide_comment_action` receives no run identifier, so it cannot tell which
+    of two reviews is newer. The ordering is supplied here instead:
+
+      - the review job is cancel-in-progress, so a superseded review is
+        cancelled and its writer never starts (the writer requires
+        `needs.review.result == 'success'`);
+      - the writer job is non-cancelable and grouped per pull request, so
+        writers queue and apply in completion order.
+
+    Together those make the published comment the latest CI review to complete.
+    Flip either and same-head replacement silently becomes arbitrary-writer-wins,
+    which is why they are asserted as a pair rather than in isolation.
+    """
+    raw = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")
+
+    review_group = re.search(
+        r"group: loopkeeper-pr-review-posting-[^\n]*\n\s+cancel-in-progress: (\w+)", raw
+    )
+    writer_group = re.search(
+        r"group: loopkeeper-pr-review-writer-[^\n]*\n\s+cancel-in-progress: (\w+)", raw
+    )
+
+    assert review_group, "review job lost its per-PR concurrency group"
+    assert writer_group, "writer job lost its per-PR concurrency group"
+    assert review_group.group(1) == "true", "a superseded review must not reach its writer"
+    assert writer_group.group(1) == "false", "writers must queue, not cancel each other"
+    assert "needs.review.result == 'success'" in raw
+
+
 def test_read_only_and_posting_review_concurrency_groups_are_disjoint():
     readonly = (ROOT / ".github/workflows/pr-review.yml").read_text(encoding="utf-8")
     posting = (ROOT / ".github/workflows/pr-review-posting.yml").read_text(encoding="utf-8")

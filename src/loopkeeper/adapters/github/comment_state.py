@@ -35,7 +35,11 @@ from loopkeeper.types import Trailer
 # ---------------------------------------------------------------------------
 
 _MARKER_RE = re.compile(r"<!-- loopkeeper-pr-review:(\d+):([0-9a-f]{40}) -->")
-_EVIDENCE_RE = re.compile(r"<!-- loopkeeper-evidence:(fallback|ci) -->")
+# The identity suffix is optional so comments published before it existed still
+# parse. Digits are bounded: the body is untrusted input to this parser.
+_EVIDENCE_RE = re.compile(
+    r"<!-- loopkeeper-evidence:(fallback|ci)(?::(\d{1,20}):(\d{1,9}))? -->"
+)
 _SUPERSEDED_RE = re.compile(r"<!-- loopkeeper-superseded:(\d+):([0-9a-f]{40}):(\d+) -->")
 # Exact author check required for suppression
 _BOT_LOGIN = "github-actions[bot]"
@@ -52,10 +56,38 @@ def serialize_pr_marker(pr: int, head_sha: str) -> str:
     return f"<!-- loopkeeper-pr-review:{pr}:{head_sha} -->"
 
 
-def serialize_evidence_marker(evidence_state: str) -> str:
+def serialize_evidence_marker(
+    evidence_state: str,
+    ci_run_id: int | None = None,
+    ci_run_attempt: int | None = None,
+) -> str:
+    """Serialize the evidence marker, optionally carrying the CI run identity.
+
+    The identity is what lets a later review tell whether it is newer than the
+    published one. It is omitted when unknown -- a fallback review has no
+    backing run, and a caller that predates this field passes nothing.
+    """
     if evidence_state not in _EVIDENCE_STATES:
         raise ValueError(f"evidence_state must be one of {_EVIDENCE_STATES}")
-    return f"<!-- loopkeeper-evidence:{evidence_state} -->"
+    if ci_run_id is None or ci_run_attempt is None:
+        return f"<!-- loopkeeper-evidence:{evidence_state} -->"
+    if not isinstance(ci_run_id, int) or not 0 < ci_run_id < 10**20:
+        raise ValueError("ci_run_id must be a bounded positive int")
+    if not isinstance(ci_run_attempt, int) or not 0 < ci_run_attempt < 10**9:
+        raise ValueError("ci_run_attempt must be a bounded positive int")
+    return f"<!-- loopkeeper-evidence:{evidence_state}:{ci_run_id}:{ci_run_attempt} -->"
+
+
+def parse_evidence_identity(body: str) -> tuple[int, int] | None:
+    """Return (ci_run_id, ci_run_attempt) from a comment body, or None.
+
+    None means the published comment predates the identity field or carries
+    fallback evidence. It is not an error, and it is not proof of staleness.
+    """
+    m = _EVIDENCE_RE.search(body)
+    if m is None or m.group(2) is None:
+        return None
+    return int(m.group(2)), int(m.group(3))
 
 
 def serialize_superseded_marker(pr: int, head_sha: str, comment_id: int) -> str:
@@ -129,13 +161,20 @@ class CommentState:
     author_login: str
     body: str
     created_at: str = ""
+    # Identity of the CI run this comment was published from. None for
+    # fallback evidence and for comments published before the field existed.
+    ci_run_id: int | None = None
+    ci_run_attempt: int | None = None
 
 
 CommentActionKind = Literal[
     "CREATE",
     "REPLACE_FALLBACK",
+    "REPLACE_CURRENT",
     "SUPPRESS_FALLBACK",
     "SUPPRESS_DUPLICATE",
+    "SUPPRESS_SAME_RUN",
+    "SUPPRESS_STALE_RUN",
     "RECONCILE_DUPLICATES",
 ]
 
@@ -173,6 +212,8 @@ def decide_comment_action(
     existing: Sequence[CommentState],
     evidence_state: Literal["fallback", "ci"],
     head_sha: str,
+    ci_run_id: int | None = None,
+    ci_run_attempt: int | None = None,
 ) -> CommentAction:
     """Pure state machine for review comment upsert.
 
@@ -183,15 +224,25 @@ def decide_comment_action(
         evidence_state: Adapter-generated evidence state for the new review ("fallback" or "ci").
         head_sha: Current head SHA for the new review.
 
-    Returns one of CREATE, REPLACE_FALLBACK, SUPPRESS_FALLBACK, SUPPRESS_DUPLICATE, RECONCILE_DUPLICATES.
+    Returns one of CREATE, REPLACE_FALLBACK, REPLACE_CURRENT, SUPPRESS_FALLBACK,
+    SUPPRESS_DUPLICATE, SUPPRESS_SAME_RUN, SUPPRESS_STALE_RUN,
+    RECONCILE_DUPLICATES.
 
-    Rules (from brief):
+    Rules:
       - no existing -> CREATE
       - same-head fallback + new fallback -> SUPPRESS_FALLBACK
       - same-head fallback + CI evidence -> REPLACE_FALLBACK (updates in place, changes evidence to ci)
-      - same-head CI + any duplicate -> SUPPRESS_DUPLICATE
+      - same-head CI + new CI -> compare CI run identity (id, attempt):
+          newer run   -> REPLACE_CURRENT
+          same run    -> SUPPRESS_SAME_RUN
+          older run   -> SUPPRESS_STALE_RUN
+          unknown     -> REPLACE_CURRENT (legacy comment or caller without identity)
+      - same-head CI + new fallback -> SUPPRESS_DUPLICATE (weaker evidence never overwrites stronger)
       - duplicate current-head comments already exist (len >=2) -> RECONCILE_DUPLICATES
         (keep oldest canonical and rewrite others to superseded marker)
+
+    Every outcome is named, and the adapter records the name. A review that
+    completes without being published must say which rule withheld it.
     """
     if evidence_state not in ("fallback", "ci"):
         raise ValueError("evidence_state must be fallback or ci")
@@ -219,8 +270,36 @@ def decide_comment_action(
         return CommentAction("SUPPRESS_FALLBACK", canonical_id=current.comment_id)
     if current.evidence_state == "fallback" and evidence_state == "ci":
         return CommentAction("REPLACE_FALLBACK", canonical_id=current.comment_id)
+    if current.evidence_state == "ci" and evidence_state == "ci":
+        # A second CI-evidenced review of the same head. Whether it should be
+        # published depends on which CI run produced it, so compare identity
+        # rather than assuming the newer arrival is the newer run.
+        #
+        # A re-run keeps GitHub's run id and increments the attempt, which is
+        # exactly the case that motivated replacing at all, so the attempt has
+        # to be part of the comparison. Ordering by run id alone would classify
+        # a re-run as a repeat of the run already published and discard it.
+        published = (current.ci_run_id, current.ci_run_attempt)
+        incoming = (ci_run_id, ci_run_attempt)
+        if None in published or None in incoming:
+            # One side predates the identity field, or a caller does not send
+            # it yet. Nothing can be proven, and the two possible errors are
+            # not symmetric: publishing costs a rewrite, withholding discards a
+            # finished review and leaves a contradicted comment standing, which
+            # is the failure this branch exists to fix. Publish.
+            return CommentAction("REPLACE_CURRENT", canonical_id=current.comment_id)
+        if incoming == published:
+            # Same run, same attempt: the published comment already represents
+            # this CI result. A redelivered event would re-run the model and
+            # produce different prose for identical evidence.
+            return CommentAction("SUPPRESS_SAME_RUN", canonical_id=current.comment_id)
+        if incoming < published:
+            # An older run finishing after a newer one already published.
+            return CommentAction("SUPPRESS_STALE_RUN", canonical_id=current.comment_id)
+        return CommentAction("REPLACE_CURRENT", canonical_id=current.comment_id)
     if current.evidence_state == "ci":
-        # same-head CI + any duplicate (new fallback or ci) suppresses
+        # CI already published here and the new review is fallback-only:
+        # weaker evidence must not overwrite stronger.
         return CommentAction("SUPPRESS_DUPLICATE", canonical_id=current.comment_id)
     # Fallback for unexpected
     return CommentAction("SUPPRESS_DUPLICATE", canonical_id=current.comment_id)
@@ -322,6 +401,8 @@ def render_comment(
     marker: str,
     evidence_state: Literal["fallback", "ci"],
     max_bytes: int,
+    ci_run_id: int | None = None,
+    ci_run_attempt: int | None = None,
 ) -> str:
     """Render the final comment body: sanitized model + adapter-owned footer.
 
@@ -334,6 +415,9 @@ def render_comment(
         marker: Canonical pr marker, e.g. <!-- loopkeeper-pr-review:{pr}:{sha} -->
         evidence_state: fallback or ci
         max_bytes: Total byte budget including footer.
+        ci_run_id: CI run this review was produced from, when known.
+        ci_run_attempt: Attempt number of that run, when known. Recorded in the
+            evidence marker so a later review can tell whether it is newer.
 
     Returns:
         Bounded, sanitized comment body with footer.
@@ -347,7 +431,7 @@ def render_comment(
     # Validate marker shape
     if not _MARKER_RE.fullmatch(marker):
         raise ValueError("marker must be <!-- loopkeeper-pr-review:{pr}:{head_sha} -->")
-    evidence_marker = serialize_evidence_marker(evidence_state)
+    evidence_marker = serialize_evidence_marker(evidence_state, ci_run_id, ci_run_attempt)
     footer = f"\n\n{marker}\n{evidence_marker}\n"
     footer_bytes = len(footer.encode("utf-8"))
     if footer_bytes >= max_bytes:
@@ -441,6 +525,8 @@ def upsert_review_comment(
     evidence_state: Literal["fallback", "ci"],
     body: str,
     writer: CommentWriter,
+    ci_run_id: int | None = None,
+    ci_run_attempt: int | None = None,
 ) -> None:
     """Idempotent review comment upsert with state machine and reconciliation.
 
@@ -518,6 +604,11 @@ def upsert_review_comment(
         parsed = parse_pr_marker(b)
         if parsed is None or parsed[0] != pr or parsed[1] != head_sha:
             continue
+        # Identity must be carried through, or every parsed comment looks like
+        # it predates the field and the freshness comparison silently never
+        # runs. None here is indistinguishable from a legacy comment, and the
+        # unknown case publishes.
+        identity = parse_evidence_identity(b)
         existing_states.append(
             CommentState(
                 comment_id=int(cid),
@@ -526,6 +617,8 @@ def upsert_review_comment(
                 author_login=login,
                 body=b,
                 created_at=created,
+                ci_run_id=identity[0] if identity else None,
+                ci_run_attempt=identity[1] if identity else None,
             )
         )
         canonical_comments.append(c)
@@ -539,7 +632,9 @@ def upsert_review_comment(
     existing_states.sort(key=sort_key)
     canonical_comments.sort(key=lambda c: (c.get("created_at") or "", c.get("id") or c.get("comment_id") or 0))
 
-    action = decide_comment_action(existing_states, evidence_state, head_sha)
+    action = decide_comment_action(
+        existing_states, evidence_state, head_sha, ci_run_id, ci_run_attempt
+    )
 
     # Render the new body with marker+evidence footer, bounded (50000 default per brief? Use 50000 if not specified)
     # The caller provides body as model markdown; we need to render with marker/footer
@@ -552,19 +647,30 @@ def upsert_review_comment(
         max_bytes = int(max_bytes_str)
     except ValueError:
         max_bytes = 50000
-    rendered = render_comment(body, marker, evidence_state, max_bytes)
+    rendered = render_comment(
+        body, marker, evidence_state, max_bytes, ci_run_id, ci_run_attempt
+    )
 
     # Operator-gated writes only
     if action.kind == "CREATE":
         _require_operator()
         writer.create(repo, pr, rendered)
         return
-    if action.kind in ("SUPPRESS_FALLBACK", "SUPPRESS_DUPLICATE"):
-        # Suppress: do nothing
+    if action.kind in (
+        "SUPPRESS_FALLBACK",
+        "SUPPRESS_DUPLICATE",
+        "SUPPRESS_SAME_RUN",
+        "SUPPRESS_STALE_RUN",
+    ):
+        # Suppress: do nothing. Every suppressing kind is listed explicitly --
+        # an unlisted one would fall through to the end of this function and
+        # also write nothing, which is the same outcome reached by accident and
+        # would hide a missing branch for a kind that should write.
         return
-    if action.kind == "REPLACE_FALLBACK":
-        # Update the single existing fallback comment in place, changing evidence to ci
-        # Keep same comment_id, update body to new rendered (which carries ci evidence)
+    if action.kind in ("REPLACE_FALLBACK", "REPLACE_CURRENT"):
+        # Update the single existing comment in place. REPLACE_FALLBACK raises
+        # the evidence from fallback to ci; REPLACE_CURRENT publishes a review
+        # from a newer CI run over one from an older run or attempt.
         _require_operator()
         target_id = action.canonical_id or existing_states[0].comment_id
         writer.update(repo, target_id, rendered)
@@ -587,8 +693,15 @@ def upsert_review_comment(
             superseded_body = f"Superseded review comment for PR #{pr} at {head_sha}.\n\n{superseded_marker}\n"
             # Ensure bounded and not silently delete: we rewrite, not delete
             writer.update(repo, dup.comment_id, superseded_body)
-        # Also ensure oldest is updated if evidence changed? If oldest was fallback and new is ci, update oldest
-        if oldest.evidence_state == "fallback" and evidence_state == "ci":
+        # Reconciling the duplicates is not a decision about the incoming
+        # review. Ask the same state machine what should happen to the comment
+        # that survives, now that it is the only one for this head, and apply
+        # it. Returning here instead discarded the review whenever duplicates
+        # happened to exist -- the reconciliation would succeed, the writer
+        # would report success, and the newer review would be gone.
+        canonical_action = decide_comment_action(
+            [oldest], evidence_state, head_sha, ci_run_id, ci_run_attempt
+        )
+        if canonical_action.kind in ("REPLACE_FALLBACK", "REPLACE_CURRENT"):
             writer.update(repo, oldest.comment_id, rendered)
-        # If new evidence is fallback and existing is ci, suppress already handled? But with duplicates we already handled.
         return

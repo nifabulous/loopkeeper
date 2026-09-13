@@ -143,7 +143,16 @@ def test_workflow_run_ci_replaces_fallback_for_same_head():
 
 
 def test_ci_replay_keeps_one_current_head_comment():
-    """Replaying CI evidence for the same head creates no second comment."""
+    """Replaying CI evidence for the same head creates no second comment.
+
+    The invariant is one comment per head, and it is asserted directly: never
+    CREATE, and always targeting the existing comment. The action *kind* is
+    deliberately not pinned here. It was, and pinning it described the
+    mechanism rather than the property -- the mechanism was SUPPRESS_DUPLICATE,
+    which satisfied this test by discarding the replayed review entirely
+    (issue #39). REPLACE_CURRENT satisfies the same invariant by updating
+    comment 101 in place, which is what the writer now does.
+    """
     existing = [
         CommentState(
             comment_id=101,
@@ -157,6 +166,6 @@ def test_ci_replay_keeps_one_current_head_comment():
 
     action = decide_comment_action(existing, "ci", HEAD_SHA)
 
-    assert action.kind == "SUPPRESS_DUPLICATE"
     assert action.kind != "CREATE"
     assert action.canonical_id == 101
+    assert action.superseded_ids == ()

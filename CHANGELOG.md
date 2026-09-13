@@ -28,6 +28,35 @@ corresponding evidence record.
 
 ### Fixed
 
+- A review triggered by a re-run of the consumer's CI is now published. The
+  review side exempts `workflow_run` from the already-reviewed short-circuit so
+  a re-run re-reviews the same head; the writer then suppressed the result as a
+  duplicate, exited success, and recorded `no_change`. A completed review whose
+  findings contradicted the published comment was discarded while every job
+  reported green. A second CI-evidenced review of the same head now replaces the
+  published comment in place, provided it comes from a newer CI run. One comment
+  per head is unchanged; a fallback review still never overwrites published CI
+  evidence.
+- The evidence marker records the CI run identity a review was produced from,
+  as `<!-- loopkeeper-evidence:ci:<run id>:<attempt> -->`. Same-head CI
+  replacement compares it, so a replay of the published run and an older run
+  finishing late are both withheld. A GitHub re-run keeps the run id and
+  increments the attempt, so both are compared; ordering by run id alone would
+  read a re-run as a repeat and discard it. Comments published before the field
+  existed still parse, and unknown identity publishes rather than withholds.
+  The identity is read from the caller's own `workflow_run` payload, so no
+  caller change is required; `ci_run_id` and `ci_run_attempt` are optional
+  inputs for callers that want to pass it explicitly.
+- `upsert_review_comment` publishes a review that replaces a current-head
+  comment. `REPLACE_CURRENT` had no branch, so the library path wrote nothing
+  and returned success. Duplicate reconciliation also returned without applying
+  the incoming review, discarding it whenever duplicate current-head comments
+  happened to exist; it now decides on the surviving comment and applies that.
+- Every outcome of the writer now names the rule that produced it.
+  `no_change` and "comment state is already current" asserted that nothing had
+  changed, which was false whenever a newer review had been withheld. The
+  suppression paths are now `suppressed_weaker_evidence` and
+  `suppressed_repeat_fallback`, and each prints why.
 - Isolated read-only and posting PR-review concurrency groups so a CI-backed
   posting run cannot cancel the read-only review (or be cancelled by it).
 - Recorded the approved Stage A and disposable-write Stage B dogfood evidence,

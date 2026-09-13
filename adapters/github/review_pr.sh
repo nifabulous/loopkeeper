@@ -86,6 +86,11 @@ LOOPKEEPER_BOT_LOGIN="${LOOPKEEPER_BOT_LOGIN:-github-actions[bot]}"
 # override; when unset it is derived from the input budget and the actual
 # changed-file count once the PR metadata is known. A fixed 1000-byte cap
 # supplied roughly 7% of a 600000-byte budget on a 45-file pull request.
+# CI run identity for the triggering workflow_run, when the caller supplies it.
+# Empty means unknown: a fallback review has no backing run, and a caller
+# pinned to a revision without these inputs sends nothing.
+: "${LOOPKEEPER_CI_RUN_ID:=}"
+: "${LOOPKEEPER_CI_RUN_ATTEMPT:=}"
 : "${LOOPKEEPER_PR_FILE_BUDGET_PERCENT:=50}"
 : "${LOOPKEEPER_PR_FILE_MIN_PATCH_BYTES:=512}"
 : "${LOOPKEEPER_PR_FILE_PATCH_CEILING:=32768}"
@@ -263,6 +268,10 @@ HEAD_REF_NAME="$(jq -r '.headRefName' <<<"$METADATA")"
 # is still capped by capture_bounded_stream below, and that guard exits 4
 # rather than degrading, so the derived cap is clamped such that
 # files * cap can never approach LOOPKEEPER_MAX_INPUT_BYTES.
+[[ -z "$LOOPKEEPER_CI_RUN_ID" || "$LOOPKEEPER_CI_RUN_ID" =~ ^[1-9][0-9]{0,19}$ ]] \
+  || { echo "LOOPKEEPER_CI_RUN_ID must be a bounded positive integer" >&2; exit 2; }
+[[ -z "$LOOPKEEPER_CI_RUN_ATTEMPT" || "$LOOPKEEPER_CI_RUN_ATTEMPT" =~ ^[1-9][0-9]{0,8}$ ]] \
+  || { echo "LOOPKEEPER_CI_RUN_ATTEMPT must be a bounded positive integer" >&2; exit 2; }
 PR_CHANGED_FILES="$(jq -r '.changedFiles // 0' <<<"$METADATA")"
 [[ "$PR_CHANGED_FILES" =~ ^[0-9]+$ ]] || PR_CHANGED_FILES=0
 if [[ -z "${LOOPKEEPER_PR_FILE_MAX_PATCH_BYTES:-}" ]]; then
@@ -952,17 +961,32 @@ fi
 # checkout is never placed on sys.path: a reviewed repository containing a
 # top-level "loopkeeper" package would otherwise shadow the trusted module
 # inside the job that holds pull-requests: write.
-python3 - "$PR_NUMBER" "$HEAD_SHA" "$EVIDENCE_STATE" "$TEMP_DIR" "$LOOPKEEPER_MAX_OUTPUT_BYTES" <<'PY'
+python3 - "$PR_NUMBER" "$HEAD_SHA" "$EVIDENCE_STATE" "$TEMP_DIR" "$LOOPKEEPER_MAX_OUTPUT_BYTES" \
+  "$LOOPKEEPER_CI_RUN_ID" "$LOOPKEEPER_CI_RUN_ATTEMPT" <<'PY'
 import sys
 from pathlib import Path
 
 from loopkeeper.adapters.github.comment_state import render_comment, serialize_pr_marker
 
-pr_number, head_sha, evidence_state, temp_dir_raw, max_bytes_raw = sys.argv[1:]
+(
+    pr_number,
+    head_sha,
+    evidence_state,
+    temp_dir_raw,
+    max_bytes_raw,
+    run_id_raw,
+    run_attempt_raw,
+) = sys.argv[1:]
 temp_dir = Path(temp_dir_raw)
 marker = serialize_pr_marker(int(pr_number), head_sha)
 model_text = (temp_dir / "review.md").read_text(encoding="utf-8")
-rendered = render_comment(model_text, marker, evidence_state, int(max_bytes_raw))
+# Identity is recorded only for CI evidence: a fallback review has no backing
+# run, and stamping one would let a later comparison treat it as if it had.
+run_id = int(run_id_raw) if run_id_raw and evidence_state == "ci" else None
+run_attempt = int(run_attempt_raw) if run_attempt_raw and evidence_state == "ci" else None
+rendered = render_comment(
+    model_text, marker, evidence_state, int(max_bytes_raw), run_id, run_attempt
+)
 (temp_dir / "comment.md").write_text(rendered, encoding="utf-8")
 PY
 
@@ -1078,7 +1102,7 @@ fi
 
 CANONICAL_JSON="$(jq -s --arg bot "$LOOPKEEPER_BOT_LOGIN" --arg marker "$MARKER" '
   map(select(.login == $bot and (.body | contains($marker))
-    and (.body | test("<!-- loopkeeper-evidence:(fallback|ci) -->"))))
+    and (.body | test("<!-- loopkeeper-evidence:(fallback|ci)(:[0-9]+:[0-9]+)? -->"))))
   | sort_by([(.created_at // ""), (.id // 0)])
 ' "$FINAL_COMMENTS_FILE")"
 CANONICAL_COUNT="$(jq 'length' <<<"$CANONICAL_JSON")"
@@ -1094,7 +1118,29 @@ if (( CANONICAL_COUNT == 0 )); then
 fi
 
 CANONICAL_ID="$(jq -r '.[0].id' <<<"$CANONICAL_JSON")"
-CANONICAL_STATE="$(jq -r '.[0].body | capture("<!-- loopkeeper-evidence:(?<state>fallback|ci) -->").state' <<<"$CANONICAL_JSON")"
+# Mirrors comment_state.decide_comment_action for the same-head CI pair. A
+# re-run keeps GitHub's run id and increments the attempt, so the attempt is
+# part of the key: ordering by run id alone would read a re-run as a repeat of
+# the run already published and discard it, which is the defect this fixes.
+#
+# Unknown identity on either side publishes. The two errors are not symmetric:
+# publishing costs a rewrite, withholding discards a finished review and leaves
+# a contradicted comment standing.
+ci_evidence_is_newer() {
+  [[ -n "$CANONICAL_RUN_ID" && -n "$CANONICAL_RUN_ATTEMPT" ]] || return 0
+  [[ -n "$LOOPKEEPER_CI_RUN_ID" && -n "$LOOPKEEPER_CI_RUN_ATTEMPT" ]] || return 0
+  if (( LOOPKEEPER_CI_RUN_ID != CANONICAL_RUN_ID )); then
+    (( LOOPKEEPER_CI_RUN_ID > CANONICAL_RUN_ID ))
+    return
+  fi
+  (( LOOPKEEPER_CI_RUN_ATTEMPT > CANONICAL_RUN_ATTEMPT ))
+}
+
+CANONICAL_EVIDENCE="$(jq -c '.[0].body | capture("<!-- loopkeeper-evidence:(?<state>fallback|ci)(:(?<run_id>[0-9]+):(?<run_attempt>[0-9]+))? -->")' <<<"$CANONICAL_JSON")"
+CANONICAL_STATE="$(jq -r '.state' <<<"$CANONICAL_EVIDENCE")"
+# Empty when the published comment predates the identity field.
+CANONICAL_RUN_ID="$(jq -r '.run_id // ""' <<<"$CANONICAL_EVIDENCE")"
+CANONICAL_RUN_ATTEMPT="$(jq -r '.run_attempt // ""' <<<"$CANONICAL_EVIDENCE")"
 
 if (( CANONICAL_COUNT > 1 )); then
   while IFS= read -r duplicate_id; do
@@ -1118,12 +1164,58 @@ if [[ "$CANONICAL_STATE" == "fallback" && "$EVIDENCE_STATE" == "ci" ]]; then
   else
     record_write_action "replaced_fallback"
   fi
-else
+elif [[ "$CANONICAL_STATE" == "ci" && "$EVIDENCE_STATE" == "ci" ]] \
+  && ci_evidence_is_newer; then
+  # A second CI-evidenced review of the same head usually comes from a re-run
+  # of the consumer's checks and may carry different evidence. This branch
+  # previously fell through to the no-write path and reported the comment state
+  # as already current, which discarded a completed review and published the
+  # claim that nothing had changed. The review side deliberately exempts
+  # workflow_run from the already-reviewed short-circuit precisely so this
+  # re-review can happen; both sides now agree.
+  #
+  # ci_evidence_is_newer establishes that this review comes from a later CI run
+  # than the one already published, so a replay and a late-finishing older run
+  # are both withheld below. The workflow concurrency groups order the writers;
+  # the identity comparison is what makes the outcome independent of that
+  # ordering.
+  patch_review_comment "$CANONICAL_ID" "$TEMP_DIR/comment.md"
   if (( CANONICAL_COUNT > 1 )); then
-    record_write_action "reconciled_duplicates"
-    echo "Loopkeeper reconciled duplicate comments for PR #${PR_NUMBER} at ${HEAD_SHA}; no new review comment needed."
+    record_write_action "reconciled_and_replaced_current"
   else
-    record_write_action "no_change"
-    echo "Loopkeeper comment state is already current for PR #${PR_NUMBER} at ${HEAD_SHA}; no write needed."
+    record_write_action "replaced_current"
+  fi
+  echo "Loopkeeper republished PR #${PR_NUMBER} at ${HEAD_SHA} from a re-run of the consumer checks."
+else
+  # The review completed and is not being published. Name the rule that
+  # withheld it. When duplicates were also reconciled above, the reason is
+  # prefixed rather than replaced: recording only "reconciled_duplicates" lost
+  # the reason, which is the reporting defect this whole change exists to fix.
+  if [[ "$CANONICAL_STATE" == "ci" && "$EVIDENCE_STATE" == "ci" ]]; then
+    if [[ "$LOOPKEEPER_CI_RUN_ID" == "$CANONICAL_RUN_ID" \
+       && "$LOOPKEEPER_CI_RUN_ATTEMPT" == "$CANONICAL_RUN_ATTEMPT" ]]; then
+      withheld_action="suppressed_same_run"
+      withheld_reason="the published comment already reports CI run ${CANONICAL_RUN_ID} attempt ${CANONICAL_RUN_ATTEMPT}"
+    else
+      withheld_action="suppressed_stale_run"
+      withheld_reason="it came from CI run ${LOOPKEEPER_CI_RUN_ID} attempt ${LOOPKEEPER_CI_RUN_ATTEMPT}, older than the published run ${CANONICAL_RUN_ID} attempt ${CANONICAL_RUN_ATTEMPT}"
+    fi
+  elif [[ "$CANONICAL_STATE" == "ci" ]]; then
+    # Weaker evidence must not overwrite stronger.
+    withheld_action="suppressed_weaker_evidence"
+    withheld_reason="the published comment carries ci evidence, which is stronger than ${EVIDENCE_STATE}"
+  else
+    # Fallback published, fallback again. No backing CI run distinguishes the
+    # two, so this is the same review triggered a second time on an unchanged
+    # head -- a label, a reopen -- and rewriting adds nothing.
+    withheld_action="suppressed_repeat_fallback"
+    withheld_reason="no new check evidence since the published comment"
+  fi
+  if (( CANONICAL_COUNT > 1 )); then
+    record_write_action "reconciled_and_${withheld_action}"
+    echo "Loopkeeper reconciled duplicate comments for PR #${PR_NUMBER} at ${HEAD_SHA} and withheld this review: ${withheld_reason}." >&2
+  else
+    record_write_action "$withheld_action"
+    echo "Loopkeeper withheld a review of PR #${PR_NUMBER} at ${HEAD_SHA}: ${withheld_reason}." >&2
   fi
 fi
