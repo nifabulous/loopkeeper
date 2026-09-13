@@ -525,6 +525,8 @@ def upsert_review_comment(
     evidence_state: Literal["fallback", "ci"],
     body: str,
     writer: CommentWriter,
+    ci_run_id: int | None = None,
+    ci_run_attempt: int | None = None,
 ) -> None:
     """Idempotent review comment upsert with state machine and reconciliation.
 
@@ -602,6 +604,11 @@ def upsert_review_comment(
         parsed = parse_pr_marker(b)
         if parsed is None or parsed[0] != pr or parsed[1] != head_sha:
             continue
+        # Identity must be carried through, or every parsed comment looks like
+        # it predates the field and the freshness comparison silently never
+        # runs. None here is indistinguishable from a legacy comment, and the
+        # unknown case publishes.
+        identity = parse_evidence_identity(b)
         existing_states.append(
             CommentState(
                 comment_id=int(cid),
@@ -610,6 +617,8 @@ def upsert_review_comment(
                 author_login=login,
                 body=b,
                 created_at=created,
+                ci_run_id=identity[0] if identity else None,
+                ci_run_attempt=identity[1] if identity else None,
             )
         )
         canonical_comments.append(c)
@@ -623,7 +632,9 @@ def upsert_review_comment(
     existing_states.sort(key=sort_key)
     canonical_comments.sort(key=lambda c: (c.get("created_at") or "", c.get("id") or c.get("comment_id") or 0))
 
-    action = decide_comment_action(existing_states, evidence_state, head_sha)
+    action = decide_comment_action(
+        existing_states, evidence_state, head_sha, ci_run_id, ci_run_attempt
+    )
 
     # Render the new body with marker+evidence footer, bounded (50000 default per brief? Use 50000 if not specified)
     # The caller provides body as model markdown; we need to render with marker/footer
@@ -636,19 +647,30 @@ def upsert_review_comment(
         max_bytes = int(max_bytes_str)
     except ValueError:
         max_bytes = 50000
-    rendered = render_comment(body, marker, evidence_state, max_bytes)
+    rendered = render_comment(
+        body, marker, evidence_state, max_bytes, ci_run_id, ci_run_attempt
+    )
 
     # Operator-gated writes only
     if action.kind == "CREATE":
         _require_operator()
         writer.create(repo, pr, rendered)
         return
-    if action.kind in ("SUPPRESS_FALLBACK", "SUPPRESS_DUPLICATE"):
-        # Suppress: do nothing
+    if action.kind in (
+        "SUPPRESS_FALLBACK",
+        "SUPPRESS_DUPLICATE",
+        "SUPPRESS_SAME_RUN",
+        "SUPPRESS_STALE_RUN",
+    ):
+        # Suppress: do nothing. Every suppressing kind is listed explicitly --
+        # an unlisted one would fall through to the end of this function and
+        # also write nothing, which is the same outcome reached by accident and
+        # would hide a missing branch for a kind that should write.
         return
-    if action.kind == "REPLACE_FALLBACK":
-        # Update the single existing fallback comment in place, changing evidence to ci
-        # Keep same comment_id, update body to new rendered (which carries ci evidence)
+    if action.kind in ("REPLACE_FALLBACK", "REPLACE_CURRENT"):
+        # Update the single existing comment in place. REPLACE_FALLBACK raises
+        # the evidence from fallback to ci; REPLACE_CURRENT publishes a review
+        # from a newer CI run over one from an older run or attempt.
         _require_operator()
         target_id = action.canonical_id or existing_states[0].comment_id
         writer.update(repo, target_id, rendered)
@@ -671,8 +693,15 @@ def upsert_review_comment(
             superseded_body = f"Superseded review comment for PR #{pr} at {head_sha}.\n\n{superseded_marker}\n"
             # Ensure bounded and not silently delete: we rewrite, not delete
             writer.update(repo, dup.comment_id, superseded_body)
-        # Also ensure oldest is updated if evidence changed? If oldest was fallback and new is ci, update oldest
-        if oldest.evidence_state == "fallback" and evidence_state == "ci":
+        # Reconciling the duplicates is not a decision about the incoming
+        # review. Ask the same state machine what should happen to the comment
+        # that survives, now that it is the only one for this head, and apply
+        # it. Returning here instead discarded the review whenever duplicates
+        # happened to exist -- the reconciliation would succeed, the writer
+        # would report success, and the newer review would be gone.
+        canonical_action = decide_comment_action(
+            [oldest], evidence_state, head_sha, ci_run_id, ci_run_attempt
+        )
+        if canonical_action.kind in ("REPLACE_FALLBACK", "REPLACE_CURRENT"):
             writer.update(repo, oldest.comment_id, rendered)
-        # If new evidence is fallback and existing is ci, suppress already handled? But with duplicates we already handled.
         return

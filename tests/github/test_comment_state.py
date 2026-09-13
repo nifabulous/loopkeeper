@@ -390,7 +390,10 @@ def test_every_decision_kind_has_a_recorded_write_action():
     from typing import get_args
 
     script = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+    # Actions reach record_write_action either as a literal or via the
+    # withheld_action variable, which the duplicate path prefixes.
     recorded = set(re.findall(r'record_write_action "([a-z_]+)"', script))
+    recorded |= set(re.findall(r'withheld_action="([a-z_]+)"', script))
 
     expected_for_kind = {
         "CREATE": {"created"},
@@ -400,7 +403,9 @@ def test_every_decision_kind_has_a_recorded_write_action():
         "SUPPRESS_DUPLICATE": {"suppressed_weaker_evidence"},
         "SUPPRESS_SAME_RUN": {"suppressed_same_run"},
         "SUPPRESS_STALE_RUN": {"suppressed_stale_run"},
-        "RECONCILE_DUPLICATES": {"reconciled_duplicates"},
+        # Reconciliation is recorded as a prefix on whichever action applied,
+        # so the reason a review was withheld is not lost to it.
+        "RECONCILE_DUPLICATES": {"reconciled_and_"},
     }
 
     kinds = set(get_args(CommentActionKind))
@@ -408,6 +413,9 @@ def test_every_decision_kind_has_a_recorded_write_action():
         "a decision kind was added or removed without mapping it to a write action"
     )
     for kind, actions in expected_for_kind.items():
+        if kind == "RECONCILE_DUPLICATES":
+            assert 'record_write_action "reconciled_and_${withheld_action}"' in script
+            continue
         assert actions & recorded, f"{kind} has no write action recorded by the shell writer"
 
 
@@ -544,3 +552,101 @@ def test_the_writer_recognises_the_marker_form_it_publishes():
                 check=True,
             )
             assert probe.stdout.strip() == "yes", f"{matcher!r} does not match {body!r}"
+
+
+# ---------------------------------------------------------------------------
+# Identity must survive the round trip through a published comment
+#
+# Constructing CommentState by hand proves the comparison arithmetic and
+# nothing else. The parser is what production reads, and it dropped the fields
+# at first: every parsed comment looked like it predated them, so the freshness
+# check never ran while its unit tests passed.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingWriter:
+    """Minimal CommentWriter that serves fixed comments and records writes."""
+
+    def __init__(self, comments: list[dict]) -> None:
+        self.comments = comments
+        self.created: list[str] = []
+        self.patched: list[tuple[int, str]] = []
+
+    def read_head(self, repo: str, pr: int) -> str:
+        return _sha("a")
+
+    def read_comments(
+        self, repo: str, pr: int, per_page: int = 100, max_pages: int = 10
+    ) -> list[dict]:
+        return self.comments
+
+    def create(self, repo: str, pr: int, body: str) -> dict:
+        self.created.append(body)
+        return {"id": 1}
+
+    def update(self, repo: str, comment_id: int, body: str) -> dict:
+        self.patched.append((comment_id, body))
+        return {"id": comment_id}
+
+
+def _published(run_id: int, attempt: int, comment_id: int = 41) -> list[dict]:
+    sha = _sha("a")
+    body = render_comment("earlier review", serialize_pr_marker(15, sha), "ci", 60000, run_id, attempt)
+    return [
+        {
+            "id": comment_id,
+            "user": {"login": "github-actions[bot]"},
+            "body": body,
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+    ]
+
+
+def test_identity_survives_render_and_parse_so_a_replay_is_withheld():
+    writer = _RecordingWriter(_published(run_id=100, attempt=1))
+
+    upsert_review_comment("o/r", 15, _sha("a"), "ci", "same run again", writer, 100, 1)
+
+    assert writer.created == []
+    assert writer.patched == [], "a replay of the published run must not rewrite the comment"
+
+
+def test_identity_survives_render_and_parse_so_a_stale_run_is_withheld():
+    writer = _RecordingWriter(_published(run_id=200, attempt=1))
+
+    upsert_review_comment("o/r", 15, _sha("a"), "ci", "older run, late", writer, 100, 1)
+
+    assert writer.created == []
+    assert writer.patched == []
+
+
+def test_identity_survives_render_and_parse_so_a_rerun_is_published(monkeypatch):
+    """The #39 case, end to end: same run id, later attempt."""
+    monkeypatch.setenv("LOOPKEEPER_OPERATOR", "1")  # writes are operator-gated
+    writer = _RecordingWriter(_published(run_id=100, attempt=1))
+
+    upsert_review_comment("o/r", 15, _sha("a"), "ci", "re-run result", writer, 100, 2)
+
+    assert writer.created == []
+    assert [cid for cid, _ in writer.patched] == [41]
+    assert "re-run result" in writer.patched[0][1]
+    assert "loopkeeper-evidence:ci:100:2" in writer.patched[0][1]
+
+
+def test_duplicate_current_head_comments_still_receive_a_newer_review(monkeypatch):
+    """Reconciliation must not swallow the replacement.
+
+    The writer supersedes extras and patches the canonical comment; the two are
+    separate steps, not alternatives.
+    """
+    monkeypatch.setenv("LOOPKEEPER_OPERATOR", "1")  # writes are operator-gated
+    comments = _published(run_id=100, attempt=1, comment_id=41)
+    comments += _published(run_id=100, attempt=1, comment_id=42)
+    comments[1]["created_at"] = "2026-01-01T00:05:00Z"
+    writer = _RecordingWriter(comments)
+
+    upsert_review_comment("o/r", 15, _sha("a"), "ci", "newer run", writer, 300, 1)
+
+    patched = {cid: body for cid, body in writer.patched}
+    assert 42 in patched and "loopkeeper-superseded" in patched[42]
+    assert 41 in patched and "newer run" in patched[41]

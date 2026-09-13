@@ -47,6 +47,11 @@ corresponding evidence record.
   The identity is read from the caller's own `workflow_run` payload, so no
   caller change is required; `ci_run_id` and `ci_run_attempt` are optional
   inputs for callers that want to pass it explicitly.
+- `upsert_review_comment` publishes a review that replaces a current-head
+  comment. `REPLACE_CURRENT` had no branch, so the library path wrote nothing
+  and returned success. Duplicate reconciliation also returned without applying
+  the incoming review, discarding it whenever duplicate current-head comments
+  happened to exist; it now decides on the surviving comment and applies that.
 - Every outcome of the writer now names the rule that produced it.
   `no_change` and "comment state is already current" asserted that nothing had
   changed, which was false whenever a newer review had been withheld. The

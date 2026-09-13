@@ -1174,11 +1174,11 @@ elif [[ "$CANONICAL_STATE" == "ci" && "$EVIDENCE_STATE" == "ci" ]] \
   # workflow_run from the already-reviewed short-circuit precisely so this
   # re-review can happen; both sides now agree.
   #
-  # Nothing here compares run identity, so this is last-writer-wins. The
-  # workflow supplies the ordering: the review job is cancel-in-progress so a
-  # superseded review never reaches its writer, and the writer job is
-  # non-cancelable and serialized per pull request so writers apply in
-  # completion order.
+  # ci_evidence_is_newer establishes that this review comes from a later CI run
+  # than the one already published, so a replay and a late-finishing older run
+  # are both withheld below. The workflow concurrency groups order the writers;
+  # the identity comparison is what makes the outcome independent of that
+  # ordering.
   patch_review_comment "$CANONICAL_ID" "$TEMP_DIR/comment.md"
   if (( CANONICAL_COUNT > 1 )); then
     record_write_action "reconciled_and_replaced_current"
@@ -1187,31 +1187,35 @@ elif [[ "$CANONICAL_STATE" == "ci" && "$EVIDENCE_STATE" == "ci" ]] \
   fi
   echo "Loopkeeper republished PR #${PR_NUMBER} at ${HEAD_SHA} from a re-run of the consumer checks."
 else
-  if (( CANONICAL_COUNT > 1 )); then
-    record_write_action "reconciled_duplicates"
-    echo "Loopkeeper reconciled duplicate comments for PR #${PR_NUMBER} at ${HEAD_SHA}; no new review comment needed."
-  elif [[ "$CANONICAL_STATE" == "ci" && "$EVIDENCE_STATE" == "ci" ]]; then
-    # Same head, both CI, and this run is not newer than the published one.
+  # The review completed and is not being published. Name the rule that
+  # withheld it. When duplicates were also reconciled above, the reason is
+  # prefixed rather than replaced: recording only "reconciled_duplicates" lost
+  # the reason, which is the reporting defect this whole change exists to fix.
+  if [[ "$CANONICAL_STATE" == "ci" && "$EVIDENCE_STATE" == "ci" ]]; then
     if [[ "$LOOPKEEPER_CI_RUN_ID" == "$CANONICAL_RUN_ID" \
        && "$LOOPKEEPER_CI_RUN_ATTEMPT" == "$CANONICAL_RUN_ATTEMPT" ]]; then
-      record_write_action "suppressed_same_run"
-      echo "Loopkeeper withheld a review of PR #${PR_NUMBER} at ${HEAD_SHA}: the published comment already reports CI run ${CANONICAL_RUN_ID} attempt ${CANONICAL_RUN_ATTEMPT}." >&2
+      withheld_action="suppressed_same_run"
+      withheld_reason="the published comment already reports CI run ${CANONICAL_RUN_ID} attempt ${CANONICAL_RUN_ATTEMPT}"
     else
-      record_write_action "suppressed_stale_run"
-      echo "Loopkeeper withheld a review of PR #${PR_NUMBER} at ${HEAD_SHA}: it came from CI run ${LOOPKEEPER_CI_RUN_ID} attempt ${LOOPKEEPER_CI_RUN_ATTEMPT}, older than the published run ${CANONICAL_RUN_ID} attempt ${CANONICAL_RUN_ATTEMPT}." >&2
+      withheld_action="suppressed_stale_run"
+      withheld_reason="it came from CI run ${LOOPKEEPER_CI_RUN_ID} attempt ${LOOPKEEPER_CI_RUN_ATTEMPT}, older than the published run ${CANONICAL_RUN_ID} attempt ${CANONICAL_RUN_ATTEMPT}"
     fi
   elif [[ "$CANONICAL_STATE" == "ci" ]]; then
-    # CI evidence is already published and this review has only fallback
-    # evidence. Withholding it is correct -- weaker evidence must not overwrite
-    # stronger -- but the review did complete, so name the reason rather than
-    # reporting that nothing changed.
-    record_write_action "suppressed_weaker_evidence"
-    echo "Loopkeeper withheld a ${EVIDENCE_STATE} review of PR #${PR_NUMBER} at ${HEAD_SHA}: the published comment carries ci evidence, which is stronger." >&2
+    # Weaker evidence must not overwrite stronger.
+    withheld_action="suppressed_weaker_evidence"
+    withheld_reason="the published comment carries ci evidence, which is stronger than ${EVIDENCE_STATE}"
   else
     # Fallback published, fallback again. No backing CI run distinguishes the
     # two, so this is the same review triggered a second time on an unchanged
     # head -- a label, a reopen -- and rewriting adds nothing.
-    record_write_action "suppressed_repeat_fallback"
-    echo "Loopkeeper withheld a repeat fallback review of PR #${PR_NUMBER} at ${HEAD_SHA}: no new check evidence since the published comment." >&2
+    withheld_action="suppressed_repeat_fallback"
+    withheld_reason="no new check evidence since the published comment"
+  fi
+  if (( CANONICAL_COUNT > 1 )); then
+    record_write_action "reconciled_and_${withheld_action}"
+    echo "Loopkeeper reconciled duplicate comments for PR #${PR_NUMBER} at ${HEAD_SHA} and withheld this review: ${withheld_reason}." >&2
+  else
+    record_write_action "$withheld_action"
+    echo "Loopkeeper withheld a review of PR #${PR_NUMBER} at ${HEAD_SHA}: ${withheld_reason}." >&2
   fi
 fi
