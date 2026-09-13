@@ -134,6 +134,7 @@ class CommentState:
 CommentActionKind = Literal[
     "CREATE",
     "REPLACE_FALLBACK",
+    "REPLACE_CURRENT",
     "SUPPRESS_FALLBACK",
     "SUPPRESS_DUPLICATE",
     "RECONCILE_DUPLICATES",
@@ -183,15 +184,20 @@ def decide_comment_action(
         evidence_state: Adapter-generated evidence state for the new review ("fallback" or "ci").
         head_sha: Current head SHA for the new review.
 
-    Returns one of CREATE, REPLACE_FALLBACK, SUPPRESS_FALLBACK, SUPPRESS_DUPLICATE, RECONCILE_DUPLICATES.
+    Returns one of CREATE, REPLACE_FALLBACK, REPLACE_CURRENT, SUPPRESS_FALLBACK,
+    SUPPRESS_DUPLICATE, RECONCILE_DUPLICATES.
 
-    Rules (from brief):
+    Rules:
       - no existing -> CREATE
       - same-head fallback + new fallback -> SUPPRESS_FALLBACK
       - same-head fallback + CI evidence -> REPLACE_FALLBACK (updates in place, changes evidence to ci)
-      - same-head CI + any duplicate -> SUPPRESS_DUPLICATE
+      - same-head CI + new CI -> REPLACE_CURRENT (a re-run of the checks; newer result wins)
+      - same-head CI + new fallback -> SUPPRESS_DUPLICATE (weaker evidence never overwrites stronger)
       - duplicate current-head comments already exist (len >=2) -> RECONCILE_DUPLICATES
         (keep oldest canonical and rewrite others to superseded marker)
+
+    Every outcome is named, and the adapter records the name. A review that
+    completes without being published must say which rule withheld it.
     """
     if evidence_state not in ("fallback", "ci"):
         raise ValueError("evidence_state must be fallback or ci")
@@ -219,8 +225,22 @@ def decide_comment_action(
         return CommentAction("SUPPRESS_FALLBACK", canonical_id=current.comment_id)
     if current.evidence_state == "fallback" and evidence_state == "ci":
         return CommentAction("REPLACE_FALLBACK", canonical_id=current.comment_id)
+    if current.evidence_state == "ci" and evidence_state == "ci":
+        # A second CI-evidenced review of the same head is a re-run of the
+        # consumer's checks, not a repeat of the same result: it is backed by a
+        # different CI run and can carry different evidence. Suppressing it
+        # discarded a completed review whose findings the published comment
+        # contradicted. Replacing keeps one comment per head and publishes the
+        # newer result.
+        #
+        # Only the CI pair replaces. A fallback review has no backing run, so a
+        # second one at the same head is the same review triggered again -- a
+        # label or a reopen -- and rewriting on those is churn with nothing new
+        # in it.
+        return CommentAction("REPLACE_CURRENT", canonical_id=current.comment_id)
     if current.evidence_state == "ci":
-        # same-head CI + any duplicate (new fallback or ci) suppresses
+        # CI already published here and the new review is fallback-only:
+        # weaker evidence must not overwrite stronger.
         return CommentAction("SUPPRESS_DUPLICATE", canonical_id=current.comment_id)
     # Fallback for unexpected
     return CommentAction("SUPPRESS_DUPLICATE", canonical_id=current.comment_id)

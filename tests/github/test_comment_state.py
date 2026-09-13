@@ -7,11 +7,14 @@ operator gating, and duplicate reconciliation.
 from __future__ import annotations
 
 import os
+import re
+from pathlib import Path
 
 import pytest
 
 # Support both import paths
 from loopkeeper.adapters.github.comment_state import (
+    CommentActionKind,
     CommentState,
     decide_comment_action,
     render_comment,
@@ -20,6 +23,9 @@ from loopkeeper.adapters.github.comment_state import (
     serialize_superseded_marker,
     upsert_review_comment,
 )
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _sha(c: str) -> str:
@@ -70,10 +76,12 @@ def test_decide_comment_action_state_machine():
     # Same-head fallback + CI -> REPLACE_FALLBACK
     assert decide_comment_action(existing, "ci", sha) == "REPLACE_FALLBACK"
 
-    # Same-head CI + any duplicate -> SUPPRESS_DUPLICATE
+    # Same-head CI + new fallback -> SUPPRESS_DUPLICATE (weaker never overwrites stronger)
     existing_ci = [CommentState(comment_id=2, head_sha=sha, evidence_state="ci", author_login="github-actions[bot]", body="x")]
     assert decide_comment_action(existing_ci, "fallback", sha) == "SUPPRESS_DUPLICATE"
-    assert decide_comment_action(existing_ci, "ci", sha) == "SUPPRESS_DUPLICATE"
+
+    # Same-head CI + new CI -> REPLACE_CURRENT (a re-run of the checks)
+    assert decide_comment_action(existing_ci, "ci", sha) == "REPLACE_CURRENT"
 
     # Duplicate current-head comments already exist -> RECONCILE_DUPLICATES
     dupes = [
@@ -324,3 +332,93 @@ def test_no_summary_is_rendered_for_a_malformed_trailer():
 
     assert "| Status |" not in rendered
     assert "**Verdict:**" not in rendered
+
+
+# ---------------------------------------------------------------------------
+# Re-run publication (issue #39)
+#
+# A review triggered by a re-run of the consumer's CI completed, produced an
+# artifact, reported writer success, and was never published. The review side
+# exempts workflow_run from the already-reviewed short-circuit so the re-review
+# can happen; the write side then suppressed it as a duplicate and reported the
+# comment state as already current. Two same-head rules that disagreed.
+# ---------------------------------------------------------------------------
+
+
+def test_a_rerun_at_an_already_reviewed_head_publishes_the_newer_review():
+    """The second CI review of a head is backed by a different run, not a repeat."""
+    sha = _sha("a")
+    published = [
+        CommentState(
+            comment_id=99,
+            head_sha=sha,
+            evidence_state="ci",
+            author_login="github-actions[bot]",
+            body="first pass",
+        )
+    ]
+
+    action = decide_comment_action(published, "ci", sha)
+
+    assert action == "REPLACE_CURRENT"
+    assert action.canonical_id == 99, "must update in place, not create a second comment"
+
+
+def test_a_fallback_review_never_overwrites_published_ci_evidence():
+    sha = _sha("a")
+    published = [
+        CommentState(
+            comment_id=99,
+            head_sha=sha,
+            evidence_state="ci",
+            author_login="github-actions[bot]",
+            body="ci pass",
+        )
+    ]
+
+    assert decide_comment_action(published, "fallback", sha) == "SUPPRESS_DUPLICATE"
+
+
+def test_every_decision_kind_has_a_recorded_write_action():
+    """The shell writer re-implements this table; drift is what caused #39.
+
+    `adapters/github/review_pr.sh` does not call `decide_comment_action` -- it
+    branches on the same inputs inline. Nothing tied the two together, so a rule
+    could change in one and not the other. This asserts every decision kind has
+    at least one write action the shell records for it.
+    """
+    from typing import get_args
+
+    script = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+    recorded = set(re.findall(r'record_write_action "([a-z_]+)"', script))
+
+    expected_for_kind = {
+        "CREATE": {"created"},
+        "REPLACE_FALLBACK": {"replaced_fallback", "reconciled_and_replaced_fallback"},
+        "REPLACE_CURRENT": {"replaced_current", "reconciled_and_replaced_current"},
+        "SUPPRESS_FALLBACK": {"suppressed_repeat_fallback"},
+        "SUPPRESS_DUPLICATE": {"suppressed_weaker_evidence"},
+        "RECONCILE_DUPLICATES": {"reconciled_duplicates"},
+    }
+
+    kinds = set(get_args(CommentActionKind))
+    assert kinds == set(expected_for_kind), (
+        "a decision kind was added or removed without mapping it to a write action"
+    )
+    for kind, actions in expected_for_kind.items():
+        assert actions & recorded, f"{kind} has no write action recorded by the shell writer"
+
+
+def test_the_writer_never_reports_an_unpublished_review_as_no_change():
+    """A completed review that is not published must name the rule that withheld it.
+
+    Reads executable lines only. A comment recording why a branch exists is
+    legitimate prose; asserting against it would forbid explaining the history.
+    """
+    script = (ROOT / "adapters/github/review_pr.sh").read_text(encoding="utf-8")
+    code = "\n".join(
+        line for line in script.splitlines() if not line.lstrip().startswith("#")
+    )
+
+    assert "no_change" not in code
+    assert "already current" not in code

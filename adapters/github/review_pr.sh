@@ -1118,12 +1118,37 @@ if [[ "$CANONICAL_STATE" == "fallback" && "$EVIDENCE_STATE" == "ci" ]]; then
   else
     record_write_action "replaced_fallback"
   fi
+elif [[ "$CANONICAL_STATE" == "ci" && "$EVIDENCE_STATE" == "ci" ]]; then
+  # A second CI-evidenced review of the same head comes from a re-run of the
+  # consumer's checks, so it is backed by a different CI run and may carry
+  # different evidence. This branch previously fell through to the no-write
+  # path and reported the comment state as already current, which discarded a
+  # completed review and published the claim that nothing had changed. The
+  # review side deliberately exempts workflow_run from the already-reviewed
+  # short-circuit precisely so this re-review can happen; both sides now agree.
+  patch_review_comment "$CANONICAL_ID" "$TEMP_DIR/comment.md"
+  if (( CANONICAL_COUNT > 1 )); then
+    record_write_action "reconciled_and_replaced_current"
+  else
+    record_write_action "replaced_current"
+  fi
+  echo "Loopkeeper republished PR #${PR_NUMBER} at ${HEAD_SHA} from a re-run of the consumer checks."
 else
   if (( CANONICAL_COUNT > 1 )); then
     record_write_action "reconciled_duplicates"
     echo "Loopkeeper reconciled duplicate comments for PR #${PR_NUMBER} at ${HEAD_SHA}; no new review comment needed."
+  elif [[ "$CANONICAL_STATE" == "ci" ]]; then
+    # CI evidence is already published and this review has only fallback
+    # evidence. Withholding it is correct -- weaker evidence must not overwrite
+    # stronger -- but the review did complete, so name the reason rather than
+    # reporting that nothing changed.
+    record_write_action "suppressed_weaker_evidence"
+    echo "Loopkeeper withheld a ${EVIDENCE_STATE} review of PR #${PR_NUMBER} at ${HEAD_SHA}: the published comment carries ci evidence, which is stronger." >&2
   else
-    record_write_action "no_change"
-    echo "Loopkeeper comment state is already current for PR #${PR_NUMBER} at ${HEAD_SHA}; no write needed."
+    # Fallback published, fallback again. No backing CI run distinguishes the
+    # two, so this is the same review triggered a second time on an unchanged
+    # head -- a label, a reopen -- and rewriting adds nothing.
+    record_write_action "suppressed_repeat_fallback"
+    echo "Loopkeeper withheld a repeat fallback review of PR #${PR_NUMBER} at ${HEAD_SHA}: no new check evidence since the published comment." >&2
   fi
 fi
